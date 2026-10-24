@@ -169,6 +169,20 @@ test('recording a payment on the deal later also moves it to Finance & Paperwork
   assert.equal(get('deals', d).stage, 'Finance & Paperwork');
 });
 
+test('the funnel counts how far deals got, including lost ones', () => {
+  const f = L.funnel('all');
+  const by = Object.fromEntries(f.stages.map(s => [s.stage, s]));
+  // Every deal reached Enquiry; each later stage can only have as many as the one above.
+  for (let i = 1; i < f.stages.length; i++) assert.ok(f.stages[i].reached <= f.stages[i - 1].reached);
+  assert.equal(by.Enquiry.reached, f.total);
+  // The "park not right" deal was lost after reaching Appointment: still counted there.
+  const nr = db.prepare("SELECT * FROM deals WHERE lost_reason = 'Park not right for customer'").get();
+  assert.equal(nr.furthest_stage, 'Appointment');
+  assert.ok(f.topLost.some(l => l.reason === 'Park not right for customer'));
+  assert.ok(by.Completed.reached >= 1); // the deal completed by handover earlier in these tests
+  assert.equal(by['Finance & Paperwork'].conversion, Math.round(100 * by['Finance & Paperwork'].reached / by['Park Tour'].reached));
+});
+
 test('databases from the earlier version are migrated to the new stages', async () => {
   const D = require('../server/db');
   const bytes = D.exportBytes();

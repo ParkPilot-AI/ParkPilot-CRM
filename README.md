@@ -1,6 +1,7 @@
 # Coastfields Customer Portal
 
-Sales CRM for Coastfields holiday home sales and part-exchanges: contacts, deals, diary, tasks with
+Sales CRM for Coastfields holiday home sales and part-exchanges: contacts, a sales funnel
+(Enquiry > Appointment > Park Tour > Finance & Paperwork > Siting & Handover), diary, tasks with
 overnight rollover, and two-way Microsoft Outlook sync. Hosted on Netlify, signed in with your
 organisation's Microsoft accounts.
 

@@ -57,7 +57,7 @@ route('GET', '/api/dashboard', () => {
   const upcoming = taskRows("t.status = 'Open' AND t.due_date > ? AND t.due_date <= ?", [day, U.addDays(day, 7)]).map(t => L.decorateTask(t, s, day));
   const appts = apptRows('a.start < ? AND a.end > ? AND a.status <> ?', [U.addDays(day, 1) + 'T00:00', day + 'T00:00', 'Cancelled']);
   const tomorrow = apptRows('a.start >= ? AND a.start < ? AND a.status = ?', [U.addDays(day, 1) + 'T00:00', U.addDays(day, 2) + 'T00:00', 'Scheduled']);
-  const pipeline = L.OPEN_STAGES.map(stage => ({ stage, count: db.prepare('SELECT COUNT(*) n FROM deals WHERE stage = ?').get(stage).n }));
+  const funnel = L.funnel(getSettings().funnelPeriod || '90');
   const monthStart = day.slice(0, 8) + '01';
   const reserved = db.prepare(`SELECT COALESCE(SUM(COALESCE(price,0) - COALESCE(part_ex_allowance,0)),0) v, COUNT(*) n FROM deals
                                WHERE stage IN ('Finance & Paperwork','Siting & Handover','Completed') AND substr(stage_changed_at,1,10) >= ?`).get(monthStart);
@@ -76,7 +76,7 @@ route('GET', '/api/dashboard', () => {
                                ORDER BY COALESCE(h.licence_expiry, '9999')`).all(U.addDays(day, 90), ageLimit);
   const review = apptRows('a.needs_review = 1 AND a.status = ?', ['Scheduled']);
   return {
-    today: day, now: U.nowLocal(), contactCount: db.prepare('SELECT COUNT(*) n FROM contacts').get().n, overdue, dueToday, doneToday, upcoming, appts, tomorrow, pipeline,
+    today: day, now: U.nowLocal(), contactCount: db.prepare('SELECT COUNT(*) n FROM contacts').get().n, overdue, dueToday, doneToday, upcoming, appts, tomorrow, funnel,
     reserved, warm: { count: warm.length, top: warm.slice(0, 8) }, upgrades: { count: upgrades.length, top: upgrades.slice(0, 8) },
     review, rollover: getState('lastRollover'), outlook: graph.status()
   };
@@ -228,6 +228,12 @@ route('POST', '/api/duplicates/merge', ({ body }) => { L.mergeContacts(int(body.
 route('POST', '/api/duplicates/dismiss', ({ body }) => { db.prepare('UPDATE contacts SET dup_dismissed = 1 WHERE dup_group = ?').run(body.group); return { ok: true }; });
 
 /* ----------------------------------------------------------------- deals */
+
+route('GET', '/api/funnel', ({ query }) => {
+  const period = ['30', '90', '365', 'all'].includes(query.period) ? query.period : (getSettings().funnelPeriod || '90');
+  if (query.remember === '1' && getSettings().funnelPeriod !== period) setSetting('funnelPeriod', period);
+  return L.funnel(period);
+});
 
 route('GET', '/api/deals', ({ query }) => {
   const stages = query.stage ? [query.stage] : L.STAGES;

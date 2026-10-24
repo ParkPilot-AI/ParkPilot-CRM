@@ -4,7 +4,7 @@ import * as today from './views/today.js';
 import * as contacts from './views/contacts.js';
 import * as contact from './views/contact.js';
 import * as diary from './views/diary.js';
-import * as pipeline from './views/pipeline.js';
+import * as funnel from './views/funnel.js';
 import * as stock from './views/stock.js';
 import * as settings from './views/settings.js';
 import * as duplicates from './views/duplicates.js';
@@ -18,7 +18,7 @@ const ROUTES = [
   [/^\/contacts\/(\d+)$/, contact, 'contacts'],
   [/^\/contacts$/, contacts, 'contacts'],
   [/^\/diary$/, diary, 'diary'],
-  [/^\/pipeline$/, pipeline, 'pipeline'],
+  [/^\/(funnel|pipeline)$/, funnel, 'funnel'],
   [/^\/stock$/, stock, 'stock'],
   [/^\/settings$/, settings, 'settings']
 ];

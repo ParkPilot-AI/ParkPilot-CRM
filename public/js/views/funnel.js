@@ -1,20 +1,23 @@
 import { get, esc, state, money, fullName, fmtAgo, fmtWhen } from '../core.js';
 import { moveStage } from '../dialogs.js';
+import { mountFunnel } from './funnelchart.js';
 
 let showClosed = false;
 
 export async function render(el) {
   const m = state.meta;
-  const data = await get('/api/deals');
+  const [data, f] = await Promise.all([get('/api/deals'), get('/api/funnel')]);
   const stages = showClosed ? m.stages : m.openStages;
   const openValue = m.openStages.reduce((s, st) => s + (st === 'Enquiry' ? 0 : data[st].value), 0);
   el.innerHTML = `
-    <div class="today-head"><h1>Pipeline</h1>
+    <div class="today-head"><h1>Funnel</h1>
       <span class="muted">${m.openStages.reduce((s, st) => s + data[st].count, 0)} open deals${openValue ? `, ${money(openValue)} beyond enquiry` : ''}</span>
       <div class="spacer"></div>
       <label class="check small"><input type="checkbox" data-closed ${showClosed ? 'checked' : ''}> Show completed and lost (${data.Completed.count + data.Lost.count})</label>
     </div>
-    <p class="faint small" style="margin:-6px 0 12px">Drag a card to move it on. Each move adds that stage’s standard tasks to your list.</p>
+    <section class="panel" style="margin-bottom:18px"><div class="panel-body" style="padding-top:16px" data-funnel></div></section>
+    <h2 style="margin:0 0 4px">Deals by stage</h2>
+    <p class="faint small" style="margin:0 0 12px">Deals move on automatically as you book appointments and record tours and payments. You can also drag a card to move it.</p>
     <div class="board">${stages.map(st => {
       const col = data[st];
       return `<div class="col" data-stage="${esc(st)}"><div class="col-head"><h3>${esc(st)} <span class="faint">${col.count}</span></h3><span class="v">${col.value ? money(col.value) : ''}</span></div>
@@ -29,6 +32,7 @@ export async function render(el) {
       </div>`;
     }).join('')}</div>`;
 
+  mountFunnel(el.querySelector('[data-funnel]'), f);
   el.querySelector('[data-closed]').onchange = e => { showClosed = e.target.checked; render(el); };
   el.querySelectorAll('.card').forEach(c => c.addEventListener('dragstart', e => { e.dataTransfer.setData('text/deal', c.dataset.deal); e.dataTransfer.setData('text/from', c.dataset.from); }));
   el.querySelectorAll('.col').forEach(col => {

@@ -58,6 +58,8 @@ async function open(bytes) {
 function migrate() {
   const cols = t => (current.exec(`PRAGMA table_info(${t})`)[0] || { values: [] }).values.map(r => r[1]);
   if (!cols('deals').includes('payment_status')) current.exec('ALTER TABLE deals ADD COLUMN payment_status TEXT');
+  // The furthest stage a deal has reached (kept when it is lost), used to draw the sales funnel.
+  if (!cols('deals').includes('furthest_stage')) current.exec('ALTER TABLE deals ADD COLUMN furthest_stage TEXT');
   // October 2026: pipeline became Enquiry > Appointment > Park Tour > Finance & Paperwork > Siting & Handover.
   current.exec(`UPDATE deals SET stage = CASE stage
       WHEN 'Viewing booked' THEN 'Appointment' WHEN 'Viewed' THEN 'Park Tour' WHEN 'Proposal' THEN 'Park Tour'
@@ -65,6 +67,7 @@ function migrate() {
       WHEN 'Siting and handover' THEN 'Siting & Handover' ELSE stage END
     WHERE stage IN ('Viewing booked','Viewed','Proposal','Reserved','Finance and paperwork','Siting and handover')`);
   current.exec("UPDATE appointments SET type = 'Park tour' WHERE type = 'Viewing'");
+  current.exec("UPDATE deals SET furthest_stage = stage WHERE furthest_stage IS NULL AND stage <> 'Lost'");
   const r = current.exec("SELECT value FROM settings WHERE key = 'durations'");
   if (r.length) {
     try {
@@ -198,6 +201,7 @@ const DEFAULT_SETTINGS = {
   rolloverTime: '02:15',
   activeLeadDays: 90,
   todoMirror: true,
+  funnelPeriod: '90',
   officeLocation: 'Sales office'
 };
 

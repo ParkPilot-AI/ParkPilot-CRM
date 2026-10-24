@@ -211,7 +211,9 @@ function setDealStage(dealId, stage, { lostReason, skipTasks = false, reason } =
   if (d.stage === stage) return;
   const s = getSettings();
   tx(() => {
-    update('deals', dealId, { stage, stage_changed_at: U.nowStamp(), lost_reason: stage === 'Lost' ? (lostReason || d.lost_reason) : d.lost_reason });
+    const was = d.furthest_stage || (d.stage === 'Lost' ? 'Enquiry' : d.stage);
+    const furthest = stage !== 'Lost' && STAGES.indexOf(stage) > STAGES.indexOf(was) ? stage : was;
+    update('deals', dealId, { stage, furthest_stage: furthest, stage_changed_at: U.nowStamp(), lost_reason: stage === 'Lost' ? (lostReason || d.lost_reason) : d.lost_reason });
     insert('interactions', { contact_id: d.contact_id, deal_id: dealId, type: 'Deal', at: U.nowLocal(), summary: `Deal moved from ${d.stage} to ${stage}${stage === 'Lost' && lostReason ? ' – ' + lostReason : reason ? ' (' + reason + ')' : ''}.` });
     const contact = get('contacts', d.contact_id);
     for (const tpl of skipTasks ? [] : STAGE_TASKS[stage] || []) {
@@ -263,6 +265,31 @@ function ensureDeal(contactId) {
   insert('interactions', { contact_id: contactId, deal_id: id, type: 'Deal', at: U.nowLocal(), summary: 'New deal opened.' });
   if (c && ['Dormant', 'Lost'].includes(c.lead_status)) update('contacts', contactId, { lead_status: 'Contacted' });
   return id;
+}
+
+// The sales funnel: of the deals opened in the period, how many reached each stage (including those
+// that went on to be completed or were later lost), how many sit there now, and their value.
+const FUNNEL_STAGES = [...OPEN_STAGES, 'Completed'];
+function funnel(period = '90') {
+  const days = { '30': 30, '90': 90, '365': 365 }[String(period)];
+  const since = days ? U.addDays(U.today(), -days) : '0000-00-00';
+  const rows = db.prepare(`SELECT stage, furthest_stage, lost_reason, COALESCE(price,0) - COALESCE(part_ex_allowance,0) AS value
+                           FROM deals WHERE substr(created_at,1,10) >= ?`).all(since);
+  const idx = st => FUNNEL_STAGES.indexOf(st);
+  const stages = FUNNEL_STAGES.map(stage => ({ stage, reached: 0, now: 0, value: 0 }));
+  const lostReasons = {};
+  let lost = 0;
+  for (const r of rows) {
+    const far = r.furthest_stage || (r.stage === 'Lost' ? 'Enquiry' : r.stage);
+    const reach = Math.max(0, idx(far));
+    for (let i = 0; i <= reach; i++) stages[i].reached++;
+    if (r.stage === 'Lost') { lost++; const k = r.lost_reason || 'No reason given'; lostReasons[k] = (lostReasons[k] || 0) + 1; continue; }
+    const at = idx(r.stage);
+    if (at >= 0) { stages[at].now++; stages[at].value += r.value || 0; }
+  }
+  stages.forEach((s, i) => { s.conversion = i === 0 ? null : (stages[i - 1].reached ? Math.round(100 * s.reached / stages[i - 1].reached) : 0); });
+  const topLost = Object.entries(lostReasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([reason, n]) => ({ reason, n }));
+  return { period: days ? String(days) : 'all', since: days ? since : null, total: rows.length, stages, lost, topLost };
 }
 
 /* ---------------------------------------------------------- appointments */
@@ -501,7 +528,7 @@ function fmtWhen(dt) {
 function httpError(status, message) { const e = new Error(message); e.status = status; return e; }
 
 module.exports = {
-  STAGES, OPEN_STAGES, APPT_TYPES, CATEGORIES, PRIORITIES, LEAD_STATUSES, PAYMENT_STATUSES, advanceDeal, ensureDeal, paymentRecorded,
+  STAGES, OPEN_STAGES, APPT_TYPES, funnel, CATEGORIES, PRIORITIES, LEAD_STATUSES, PAYMENT_STATUSES, advanceDeal, ensureDeal, paymentRecorded,
   urgencyOf, decorateTask, rollOverTasks, maybeScheduledRollover, createTask, completeTask, snoozeTask, reviewTask,
   addInteraction, logCall, mergeContacts, touchContact, setDealStage,
   suggestSlots, createAppointment, updateAppointment, cancelAppointment, recordOutcome, fmtWhen, httpError, syncAutoTasks

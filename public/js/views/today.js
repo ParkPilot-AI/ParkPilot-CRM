@@ -2,6 +2,7 @@ import { get, post, esc, fmtDate, fmtAgo, fmtDay, fmtTime, fullName, money, plur
 import { taskDialog, bookDialog } from '../dialogs.js';
 import { taskRow, bindTasks, diaryCard, bindDiary } from './parts.js';
 import { importZone } from './importui.js';
+import { mountFunnel } from './funnelchart.js';
 
 let showDone = false;
 
@@ -61,9 +62,9 @@ export async function render(el) {
       </div>
     </div>
 
-    <section class="panel" style="margin-top:20px" aria-labelledby="pipe-h">
-      <div class="panel-head"><h2 id="pipe-h">Pipeline</h2><span class="faint small">${d.reserved.n ? `${money(d.reserved.v)} reserved or better this month (${plural(d.reserved.n, 'deal')})` : 'No reservations yet this month'}</span><div class="spacer"></div><a class="small" href="#/pipeline">Open pipeline</a></div>
-      <div class="pipe-strip">${d.pipeline.map(p => `<a href="#/pipeline"><span class="n">${p.count}</span><span class="l">${esc(p.stage)}</span></a>`).join('')}</div>
+    <section class="panel" style="margin-top:20px" aria-labelledby="funnel-h">
+      <div class="panel-head"><h2 id="funnel-h">Sales funnel</h2><span class="faint small">${d.reserved.n ? `${money(d.reserved.v)} committed this month (${plural(d.reserved.n, 'deal')})` : 'No deposits or payments yet this month'}</span><div class="spacer"></div><a class="small" href="#/funnel">Open funnel</a></div>
+      <div class="panel-body" data-funnel></div>
     </section>
 
     <div class="dash" style="margin-top:20px;grid-template-columns:1fr 1fr">
@@ -84,6 +85,7 @@ export async function render(el) {
 
   const wi = el.querySelector('[data-welcome-import]');
   if (wi) importZone(wi, { onDone: () => setTimeout(() => changed(), 2500) });
+  mountFunnel(el.querySelector('[data-funnel]'), d.funnel);
   bindTasks(el.querySelector('#todo'), [...d.overdue, ...d.dueToday, ...d.doneToday, ...d.upcoming]);
   bindDiary(el.querySelector('#diary-today'));
   el.querySelector('[data-toggle-done]')?.addEventListener('click', () => { showDone = !showDone; render(el); });
