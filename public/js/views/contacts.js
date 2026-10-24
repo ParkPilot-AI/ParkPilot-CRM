@@ -1,4 +1,4 @@
-import { get, esc, state, fmtDate, fmtAgo, fullName, options, fmtWhen } from '../core.js';
+import { get, esc, state, fmtDate, fmtAgo, fullName, options, fmtWhen, icon } from '../core.js';
 import { contactDialog } from '../dialogs.js';
 
 let sourcesCache = null;
@@ -21,9 +21,10 @@ export async function render(el, { query }) {
   el.innerHTML = `
     <div class="today-head"><h1>Contacts</h1><span class="muted">${data.total.toLocaleString('en-GB')} ${filtered ? 'matching' : 'in total'}</span><div class="spacer"></div>
       ${dupGroups.length ? `<a class="btn" href="#/contacts/duplicates">Review ${dupGroups.length} possible duplicates</a>` : ''}
-      <a class="btn" href="/api/export/contacts.csv" download>Export CSV</a>
-      <button class="btn primary" data-new>+ Contact</button></div>
-    <div class="toolbar">
+      <a class="btn desk-only" href="/api/export/contacts.csv" download>Export CSV</a>
+      <button class="btn primary desk-only" data-new>+ Contact</button></div>
+    <div class="toolbar contacts-filters${filtered ? ' open' : ''}">
+      <button type="button" class="btn filter-toggle" data-togglefilters aria-expanded="${filtered ? 'true' : 'false'}">${filtered ? 'Filters on' : 'Filter and sort'}</button>
       <input type="search" data-f="q" placeholder="Filter by name, phone, email, lead no." value="${esc(query.q || '')}" style="min-width:260px">
       <select data-f="status" aria-label="Lead status">${options(m.leadStatuses, query.status, { blank: 'Any status' })}</select>
       <select data-f="type" aria-label="Type">${options(m.contactTypes, query.type, { blank: 'Any type' })}</select>
@@ -33,7 +34,7 @@ export async function render(el, { query }) {
       <label class="small muted">Sort <select data-f="sort">${options([{ value: 'recent', label: 'Newest enquiry' }, { value: 'touched', label: 'Last contact' }, { value: 'name', label: 'Surname' }], query.sort || 'recent')}</select></label>
       ${filtered ? '<button class="btn ghost small" data-clear>Clear filters</button>' : ''}
     </div>
-    ${data.rows.length ? `<div class="table-wrap"><table class="list">
+    ${data.rows.length ? `<div class="table-wrap desk-only"><table class="list">
       <thead><tr><th>Name</th><th class="hide-m">Mobile</th><th class="hide-m">Email</th><th>Status</th><th class="hide-m">Deal stage</th><th class="hide-m">Source</th><th>Enquired</th><th class="hide-m">Last contact</th></tr></thead>
       <tbody>${data.rows.map(c => `<tr class="click" data-id="${c.id}" tabindex="0">
         <td class="name-cell"><strong>${esc(fullName(c))}</strong><span class="faint small">${esc(c.lead_no || c.type)}${c.dup_group && !c.dup_dismissed ? ' · <span class="badge amber" style="padding:0 6px">Possible duplicate</span>' : ''}${c.next_appt ? ` · next: ${esc(fmtWhen(c.next_appt))}` : ''}${c.open_tasks ? ` · ${c.open_tasks} open task${c.open_tasks > 1 ? 's' : ''}` : ''}</span></td>
@@ -45,6 +46,12 @@ export async function render(el, { query }) {
         <td class="nowrap small">${esc(c.enquiry_date ? fmtDate(c.enquiry_date) : '')}</td>
         <td class="hide-m small">${esc(c.last_contact_at ? fmtAgo(c.last_contact_at) : '')}</td>
       </tr>`).join('')}</tbody></table></div>
+      <ul class="m-cards" aria-label="Contacts">${data.rows.map(c => `<li class="m-card" data-id="${c.id}">
+        <a class="m-main" href="#/contacts/${c.id}"><b>${esc(fullName(c))}</b>
+          <span class="m-sub"><span class="status ${esc(c.lead_status)}">${esc(c.lead_status)}</span>${c.stage ? ` · ${esc(c.stage)}` : ''}${c.lead_source ? ` · ${esc(c.lead_source)}` : ''}</span>
+          <span class="m-sub faint">${c.next_appt ? `Next: ${esc(fmtWhen(c.next_appt))}` : c.enquiry_date ? `Enquired ${esc(fmtDate(c.enquiry_date))}` : ''}${c.open_tasks ? ` · ${c.open_tasks} open task${c.open_tasks > 1 ? 's' : ''}` : ''}${c.dup_group && !c.dup_dismissed ? ' · possible duplicate' : ''}</span></a>
+        ${c.phone_e164 || c.mobile ? `<a class="m-call" href="tel:${esc(c.phone_e164 || c.mobile)}" aria-label="Call ${esc(fullName(c))}">${icon('phone')}</a>` : ''}
+      </li>`).join('')}</ul>
       <div class="pager"><span>Page ${data.page} of ${pages}</span><span>
         <button class="btn small" data-page="${data.page - 1}" ${data.page <= 1 ? 'disabled' : ''}>Previous</button>
         <button class="btn small" data-page="${data.page + 1}" ${data.page >= pages ? 'disabled' : ''}>Next</button></span></div>`
@@ -54,6 +61,10 @@ export async function render(el, { query }) {
   el.querySelector('[data-f=q]').addEventListener('input', e => { clearTimeout(t); t = setTimeout(() => setQuery({ q: e.target.value.trim() }), 350); });
   el.querySelectorAll('select[data-f]').forEach(s => s.addEventListener('change', () => setQuery({ [s.dataset.f]: s.value })));
   el.querySelector('[data-clear]')?.addEventListener('click', () => { location.hash = '#/contacts'; });
+  el.querySelector('[data-togglefilters]').addEventListener('click', e => {
+    const box = el.querySelector('.contacts-filters'); box.classList.toggle('open');
+    e.currentTarget.setAttribute('aria-expanded', box.classList.contains('open'));
+  });
   el.querySelectorAll('[data-page]').forEach(b => b.addEventListener('click', () => setQuery({ page: b.dataset.page })));
   el.querySelector('[data-new]').onclick = () => contactDialog(null, { onSaved: c => { location.hash = `#/contacts/${c.id}`; } });
   el.querySelector('tbody')?.addEventListener('click', e => { if (e.target.closest('a')) return; const r = e.target.closest('tr[data-id]'); if (r) location.hash = `#/contacts/${r.dataset.id}`; });

@@ -123,6 +123,13 @@ export function toast(message, { error = false, action, onAction, ms = 4200 } = 
 
 /* ---------------------------------------------------------------- modal */
 
+const openModals = new Set();
+// Closes every open dialog and menu sheet (used when the page changes, e.g. the phone's back gesture).
+export function closeOverlays() {
+  [...openModals].forEach(c => c());
+  document.querySelectorAll('.menu, .sheet-backdrop').forEach(m => m.remove());
+}
+
 export function modal({ title, body, foot, wide = false, onMount, onClose }) {
   const back = document.createElement('div');
   back.className = 'backdrop';
@@ -130,11 +137,12 @@ export function modal({ title, body, foot, wide = false, onMount, onClose }) {
     <div class="modal-head"><h2>${esc(title)}</h2><button class="btn ghost icon" data-close aria-label="Close">${icon('x')}</button></div>
     <form class="modal-form" novalidate><div class="modal-body">${body}</div>${foot ? `<div class="modal-foot">${foot}</div>` : ''}</form></div>`;
   const prevFocus = document.activeElement;
-  const close = () => { back.remove(); document.removeEventListener('keydown', onKey); onClose && onClose(); prevFocus && prevFocus.focus && prevFocus.focus(); };
+  const close = () => { if (!openModals.delete(close)) return; back.remove(); document.removeEventListener('keydown', onKey); onClose && onClose(); prevFocus && prevFocus.focus && prevFocus.focus(); };
   const onKey = e => { if (e.key === 'Escape' && !document.querySelector('.picker .opts:not(.hidden)')) close(); };
   back.addEventListener('mousedown', e => { if (e.target === back) close(); });
   back.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); close(); }));
   document.addEventListener('keydown', onKey);
+  openModals.add(close);
   document.body.appendChild(back);
   const root = back.querySelector('.modal');
   const form = back.querySelector('form');
@@ -169,31 +177,44 @@ export function formData(form) {
 
 /* ----------------------------------------------------------------- menu */
 
-export function popMenu(anchor, items) {
-  document.querySelectorAll('.menu').forEach(m => m.remove());
+export const isPhone = () => window.matchMedia('(max-width: 760px)').matches;
+
+// A small menu next to its button on desktop; a sheet that slides up from the bottom on phones.
+export function popMenu(anchor, items, { title } = {}) {
+  document.querySelectorAll('.menu, .sheet-backdrop').forEach(m => m.remove());
+  const sheet = isPhone();
   const m = document.createElement('div');
-  m.className = 'menu';
+  m.className = 'menu' + (sheet ? ' sheet' : '');
   m.setAttribute('role', 'menu');
-  m.innerHTML = items.map((it, i) => it === '-' ? '<hr style="border:0;border-top:1px solid var(--line-soft);margin:4px 0">' :
-    `<button type="button" role="menuitem" data-i="${i}">${it.icon ? icon(it.icon) : ''}${esc(it.label)}${it.kbd ? `<kbd>${esc(it.kbd)}</kbd>` : ''}</button>`).join('');
+  m.innerHTML = (sheet && title ? `<div class="sheet-title">${esc(title)}</div>` : '') + items.map((it, i) => it === '-' ? '<hr style="border:0;border-top:1px solid var(--line-soft);margin:4px 0">' :
+    `<button type="button" role="menuitem" data-i="${i}" class="${it.danger ? 'danger' : ''}">${it.icon ? icon(it.icon) : ''}${esc(it.label)}${it.kbd && !sheet ? `<kbd>${esc(it.kbd)}</kbd>` : ''}</button>`).join('')
+    + (sheet ? '<button type="button" class="sheet-cancel" data-cancel>Cancel</button>' : '');
+  let back = null;
+  if (sheet) { back = document.createElement('div'); back.className = 'sheet-backdrop'; document.body.appendChild(back); }
   document.body.appendChild(m);
-  const r = anchor.getBoundingClientRect();
-  const w = m.offsetWidth;
-  m.style.top = `${r.bottom + window.scrollY + 6}px`;
-  m.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)) + window.scrollX}px`;
-  const close = () => { m.remove(); document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', key); };
-  const outside = e => { if (!m.contains(e.target) && e.target !== anchor) close(); };
+  if (!sheet) {
+    const r = anchor.getBoundingClientRect();
+    const w = m.offsetWidth;
+    m.style.top = `${r.bottom + window.scrollY + 6}px`;
+    m.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)) + window.scrollX}px`;
+  }
+  const close = () => { m.remove(); back && back.remove(); document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', key); };
+  const outside = e => { if (!m.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)) close(); };
   const key = e => {
     if (e.key === 'Escape') { close(); anchor.focus(); }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      const bs = [...m.querySelectorAll('button')]; const i = bs.indexOf(document.activeElement);
+      const bs = [...m.querySelectorAll('button[data-i]')]; const i = bs.indexOf(document.activeElement);
       bs[(i + (e.key === 'ArrowDown' ? 1 : -1) + bs.length) % bs.length].focus();
     }
   };
-  m.addEventListener('click', e => { const b = e.target.closest('button[data-i]'); if (b) { close(); items[+b.dataset.i].run(); } });
+  m.addEventListener('click', e => {
+    if (e.target.closest('[data-cancel]')) { close(); return; }
+    const b = e.target.closest('button[data-i]'); if (b) { close(); items[+b.dataset.i].run(); }
+  });
+  back && back.addEventListener('click', close);
   setTimeout(() => { document.addEventListener('mousedown', outside); document.addEventListener('keydown', key); }, 0);
-  m.querySelector('button').focus();
+  if (!sheet) m.querySelector('button').focus();
 }
 
 /* -------------------------------------------------------- contact picker */

@@ -1,4 +1,4 @@
-import { state, get, loadMeta, esc, popMenu, fullName, bus, toast } from './core.js';
+import { state, get, loadMeta, esc, popMenu, fullName, bus, toast, isPhone, closeOverlays } from './core.js';
 import { taskDialog, bookDialog, noteDialog, contactDialog } from './dialogs.js';
 import * as today from './views/today.js';
 import * as contacts from './views/contacts.js';
@@ -33,7 +33,9 @@ async function render({ keepScroll = false } = {}) {
   const { path, query } = parseHash();
   const r = ROUTES.find(([re]) => re.test(path)) || ROUTES[0];
   const match = path.match(r[0]);
-  document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === r[2]));
+  const navKey = isPhone() && ['stock', 'settings'].includes(r[2]) ? 'more' : r[2];
+  document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === navKey || (a.dataset.nav === r[2] && !isPhone())));
+  document.body.dataset.route = r[2];
   const same = current && current.mod === r[1] && current.path === path;
   const y = window.scrollY;
   current = { mod: r[1], path };
@@ -117,9 +119,22 @@ function openNew(anchor) {
     { label: 'Task', icon: 'task', kbd: 'T', run: () => taskDialog({ contact: c }) },
     { label: 'Appointment', icon: 'cal', kbd: 'A', run: () => bookDialog({ contact: c }) },
     { label: 'Contact', icon: 'user', kbd: 'C', run: () => contactDialog(null, { onSaved: s => { location.hash = `#/contacts/${s.id}`; } }) }
-  ]);
+  ], { title: c ? `New for ${fullName(c)}` : 'Add new' });
 }
 document.getElementById('new-btn').addEventListener('click', e => openNew(e.currentTarget));
+document.getElementById('fab').addEventListener('click', e => openNew(e.currentTarget));
+
+// Phones: "More" holds the pages that don't fit in the bottom bar.
+document.getElementById('more-btn').addEventListener('click', e => {
+  popMenu(e.currentTarget, [
+    { label: 'Homes and plots', icon: 'home', run: () => { location.hash = '#/stock'; } },
+    { label: 'Settings', icon: 'edit', run: () => { location.hash = '#/settings'; } },
+    { label: 'Possible duplicates', icon: 'user', run: () => { location.hash = '#/contacts/duplicates'; } },
+    { label: 'Export contacts (CSV)', icon: 'note', run: () => { location.href = '/api/export/contacts.csv'; } },
+    '-',
+    { label: 'Sign out', icon: 'x', danger: true, run: () => { location.href = '/auth/logout'; } }
+  ], { title: state.meta && state.meta.user ? `Signed in as ${state.meta.user.email}` : 'More' });
+});
 
 // Keyboard shortcuts when not typing: / search, N note, T task, A appointment, C contact.
 document.addEventListener('keydown', e => {
@@ -136,8 +151,16 @@ document.addEventListener('keydown', e => {
 });
 
 window.addEventListener('scroll', () => document.getElementById('topbar').classList.toggle('scrolled', window.scrollY > 4), { passive: true });
-window.addEventListener('hashchange', () => render());
+window.addEventListener('hashchange', () => { closeOverlays(); render(); });
 bus.addEventListener('changed', () => render({ keepScroll: true }));
+
+// Installed as an app there's no browser refresh button, so refresh whenever the app comes back to the front.
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') hiddenAt = Date.now();
+  else if (hiddenAt && Date.now() - hiddenAt > 30e3 && !document.querySelector('.backdrop')) render({ keepScroll: true });
+});
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 
 // Refresh the current view every two minutes (picks up Outlook changes and the nightly rollover).
 setInterval(() => { if (!document.querySelector('.backdrop') && document.visibilityState === 'visible') render({ keepScroll: true }); }, 120e3);

@@ -1,0 +1,22 @@
+{
+  "name": "Coastfields Customer Portal",
+  "short_name": "Coastfields",
+  "description": "Sales CRM for Coastfields holiday home sales: today's tasks, diary, contacts and the sales funnel.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#eef3f6",
+  "theme_color": "#ffffff",
+  "lang": "en-GB",
+  "icons": [
+    { "src": "/img/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/img/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/img/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Today", "url": "/#/", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Diary", "url": "/#/diary", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Contacts", "url": "/#/contacts", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

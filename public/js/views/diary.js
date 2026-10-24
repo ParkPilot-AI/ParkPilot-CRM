@@ -1,7 +1,9 @@
-import { get, patch, esc, state, today, addDays, parts, fmtDate, fmtTime, fullName, minutes, hhmm, nowLocal, toast, changed, typeClass, fmtDay } from '../core.js';
+import { get, patch, esc, state, today, addDays, parts, fmtDate, fmtTime, fullName, minutes, hhmm, nowLocal, toast, changed, typeClass, fmtDay, isPhone } from '../core.js';
 import { bookDialog, apptDialog } from '../dialogs.js';
+import { diaryCard, bindDiary } from './parts.js';
 
-let mode = 'week';
+let mode = 'week';      // desktop: day, week or month
+let phoneMode = 'agenda'; // phones: day or agenda (the next two weeks as a list)
 let anchor = null;
 let showOutlook = true;
 const PX = 48 / 60; // pixels per minute
@@ -13,9 +15,12 @@ export async function render(el, { query }) {
   if (query.date) anchor = query.date;
   if (!anchor) anchor = today();
   const s = state.meta.settings;
+  const phone = isPhone();
+  const view = phone ? phoneMode : mode;
   let from, to;
-  if (mode === 'day') { from = to = anchor; }
-  else if (mode === 'week') { from = mondayOf(anchor); to = addDays(from, 6); }
+  if (view === 'day') { from = to = anchor; }
+  else if (view === 'agenda') { from = anchor; to = addDays(anchor, 13); }
+  else if (view === 'week') { from = mondayOf(anchor); to = addDays(from, 6); }
   else { const p = parts(anchor); const first = `${p.y}-${String(p.m).padStart(2, '0')}-01`; from = mondayOf(first); to = addDays(from, 41); }
   const [data, tasks] = await Promise.all([
     get(`/api/appointments?from=${from}&to=${to}&outlook=${showOutlook ? 1 : 0}&cancelled=1`),
@@ -24,15 +29,15 @@ export async function render(el, { query }) {
   const days = []; for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);
   const unscheduled = tasks.filter(t => t.due_date && t.due_date <= addDays(today(), 7)).slice(0, 30);
 
-  const title = mode === 'month' ? `${MO[parts(anchor).m - 1]} ${parts(anchor).y}`
-    : mode === 'day' ? fmtDate(anchor, { long: true })
+  const title = view === 'month' ? `${MO[parts(anchor).m - 1]} ${parts(anchor).y}`
+    : view === 'day' ? fmtDate(anchor, { long: true })
     : `${fmtDate(from)} – ${fmtDate(to)}`;
 
   el.innerHTML = `
     <div class="today-head"><h1>Diary</h1><span class="muted">${esc(title)}</span><div class="spacer"></div>
-      <div class="seg" role="group" aria-label="View">${['day', 'week', 'month'].map(m => `<button type="button" data-mode="${m}" class="${mode === m ? 'on' : ''}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div>
+      <div class="seg" role="group" aria-label="View">${(phone ? ['day', 'agenda'] : ['day', 'week', 'month']).map(m => `<button type="button" data-mode="${m}" class="${view === m ? 'on' : ''}">${m === 'agenda' ? 'Next 2 weeks' : m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div>
       <div class="seg"><button type="button" data-nav="-1" aria-label="Previous">‹</button><button type="button" data-nav="0">Today</button><button type="button" data-nav="1" aria-label="Next">›</button></div>
-      <button class="btn primary" data-book>+ Appointment</button>
+      <button class="btn primary desk-only" data-book>+ Appointment</button>
     </div>
     <div class="toolbar">
       <div class="legend">${state.meta.apptTypes.map(t => `<span class="${typeClass(t)}"><i></i>${esc(t)}</span>`).join('')}${showOutlook ? '<span><i style="background:#e6ebef;border:1px dashed #b7c4cf"></i>Other Outlook events</span>' : ''}</div>
@@ -40,29 +45,42 @@ export async function render(el, { query }) {
       <label class="check small"><input type="checkbox" data-outlook ${showOutlook ? 'checked' : ''}> Show everything in Outlook</label>
     </div>
     <div class="cal-wrap">
-      <div class="cal" id="cal">${mode === 'month' ? monthGrid(days, data, anchor) : weekGrid(days, data, s)}</div>
-      <aside class="panel" style="max-height:calc(100vh - 200px);overflow:auto;position:sticky;top:80px">
+      <div class="${view === 'agenda' ? 'agenda' : 'cal'}" id="cal">${view === 'agenda' ? agendaList(days, data) : view === 'month' ? monthGrid(days, data, anchor) : weekGrid(days, data, s)}</div>
+      <aside class="panel side-panel">
         <div class="panel-head"><h2>Follow-ups this week</h2></div>
-        <p class="faint small" style="margin:0 14px 10px">Drag one onto the diary to book time for it.</p>
-        ${unscheduled.length ? unscheduled.map(t => `<div class="side-task" draggable="true" data-task="${t.id}"><b>${esc(t.title)}</b><div class="faint small">${esc(t.category)} · ${esc(fmtDay(t.due_date))}${t.contact_id ? ' · ' + esc(fullName(t)) : ''}</div></div>`).join('')
+        <p class="faint small" style="margin:0 14px 10px">${phone ? 'Tap “Book time” to put one in the diary.' : 'Click “Book time”, or drag one onto the diary.'}</p>
+        ${unscheduled.length ? unscheduled.map(t => `<div class="side-task" draggable="${phone ? 'false' : 'true'}" data-task="${t.id}"><div><b>${esc(t.title)}</b><div class="faint small">${esc(t.category)} · ${esc(fmtDay(t.due_date))}${t.contact_id ? ' · ' + esc(fullName(t)) : ''}</div></div><button type="button" class="btn small" data-booktask="${t.id}">Book time</button></div>`).join('')
           : '<div class="empty small">Nothing outstanding.</div>'}
       </aside>
     </div>`;
 
-  el.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => { mode = b.dataset.mode; render(el, { query: {} }); }));
+  el.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => { if (phone) phoneMode = b.dataset.mode; else mode = b.dataset.mode; render(el, { query: {} }); }));
   el.querySelectorAll('[data-nav]').forEach(b => b.addEventListener('click', () => {
     const n = Number(b.dataset.nav);
     if (n === 0) anchor = today();
-    else if (mode === 'day') anchor = addDays(anchor, n);
-    else if (mode === 'week') anchor = addDays(anchor, 7 * n);
+    else if (view === 'day') anchor = addDays(anchor, n);
+    else if (view === 'agenda') anchor = addDays(anchor, 14 * n);
+    else if (view === 'week') anchor = addDays(anchor, 7 * n);
     else { const p = parts(anchor); const dt = new Date(Date.UTC(p.y, p.m - 1 + n, 1)); anchor = dt.toISOString().slice(0, 10); }
     render(el, { query: {} });
   }));
   el.querySelector('[data-book]').onclick = () => bookDialog();
+  const bookTask = (taskId, start = null) => {
+    const t = tasks.find(x => String(x.id) === String(taskId));
+    if (!t) return;
+    bookDialog({ start, contact: t.contact_id ? { id: t.contact_id, first_name: t.first_name, last_name: t.last_name, email: t.contact_email } : null,
+      type: t.category === 'Call' ? 'Phone call' : 'Park tour', title: t.title, notes: t.notes || '' });
+  };
+  el.querySelectorAll('[data-booktask]').forEach(b => b.addEventListener('click', () => bookTask(b.dataset.booktask)));
+  if (view === 'agenda') {
+    bindDiary(el.querySelector('#cal'));
+    el.querySelectorAll('[data-dayadd]').forEach(b => b.addEventListener('click', () => bookDialog({ start: `${b.dataset.dayadd}T10:00` })));
+    return;
+  }
   el.querySelector('[data-outlook]').onchange = e => { showOutlook = e.target.checked; render(el, { query: {} }); };
   el.querySelectorAll('[data-ev]').forEach(x => x.addEventListener('click', e => { e.stopPropagation(); apptDialog(x.dataset.ev); }));
 
-  if (mode === 'month') {
+  if (view === 'month') {
     el.querySelectorAll('.month .d').forEach(d => d.addEventListener('click', () => { anchor = d.dataset.day; mode = 'day'; render(el, { query: {} }); }));
     return;
   }
@@ -105,12 +123,7 @@ export async function render(el, { query }) {
         await patch(`/api/appointments/${apptId}`, { start });
         toast(`Moved to ${fmtDay(start)} ${hhmm(m)}${state.meta.outlook.connected ? '; Outlook and the invite updated' : ''}`);
         changed();
-      } else if (taskId) {
-        const t = tasks.find(x => String(x.id) === taskId);
-        if (!t) return;
-        bookDialog({ start, contact: t.contact_id ? { id: t.contact_id, first_name: t.first_name, last_name: t.last_name, email: t.contact_email } : null,
-          type: t.category === 'Call' ? 'Phone call' : 'Park tour', title: t.title, notes: t.notes || '' });
-      }
+      } else if (taskId) bookTask(taskId, start);
     });
   });
   el.querySelectorAll('.ev[draggable=true]').forEach(ev => ev.addEventListener('dragstart', e => { e.dataTransfer.setData('text/appt', ev.dataset.ev); e.dataTransfer.effectAllowed = 'move'; }));
@@ -118,6 +131,23 @@ export async function render(el, { query }) {
   // Scroll to the working day.
   const nowEl = body.querySelector('.now-bar');
   body.scrollTop = nowEl ? Math.max(0, parseFloat(nowEl.style.top) - 160) : Math.max(0, (minutes(state.meta.settings.openingHours.start) - startMin - 30) * PX);
+}
+
+// Phones: the next two weeks as a simple list, one heading per day.
+function agendaList(days, data) {
+  const td = today();
+  const out = days.map(d => {
+    const start = `${d}T00:00`, end = `${addDays(d, 1)}T00:00`;
+    const appts = data.appts.filter(a => a.start < end && a.end > start && a.status !== 'Cancelled');
+    const other = (data.outlook || []).filter(o => o.start < end && o.end > start);
+    if (!appts.length && !other.length && d !== td) return '';
+    return `<section class="ag-day"><div class="ag-head"><h3>${esc(d === td ? 'Today' : fmtDay(d))}<span class="faint"> ${esc(d === td || fmtDay(d) === 'Tomorrow' ? fmtDate(d) : '')}</span></h3>
+      <button type="button" class="btn ghost small" data-dayadd="${d}" aria-label="Book on ${esc(fmtDate(d))}">+ Book</button></div>
+      ${appts.map(a => diaryCard(a)).join('')}
+      ${other.map(o => `<div class="ag-busy">${o.is_all_day ? 'All day' : `${esc(fmtTime(o.start))} – ${esc(fmtTime(o.end))}`} · ${esc(o.subject || 'Busy')} <span class="faint">(Outlook)</span></div>`).join('')}
+      ${!appts.length && !other.length ? '<div class="faint small" style="padding:4px 2px 10px">Nothing booked today.</div>' : ''}</section>`;
+  }).join('');
+  return out || '<div class="empty"><strong>Nothing booked in these two weeks</strong>Use + to book a park tour.</div>';
 }
 
 function layoutDay(items) {

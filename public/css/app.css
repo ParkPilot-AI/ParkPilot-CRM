@@ -409,3 +409,174 @@ code { background: var(--surface-2); border: 1px solid var(--line-soft); padding
   .f-head .seg button { padding: 6px 9px; font-size: 13px; }
 }
 @media (prefers-reduced-motion: reduce) { .f-band { transition: none; } }
+
+/* =====================================================================
+   Phones and installed web app
+   ===================================================================== */
+.more-btn, .fab, .m-cards, .stage-tabs, .dup-cards { display: none; }
+.dash-half { grid-template-columns: 1fr 1fr; }
+.side-panel { max-height: calc(100vh - 200px); overflow: auto; position: sticky; top: 80px; }
+.side-task { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.side-task .btn { flex: none; }
+.card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; }
+.card-top .btn { padding: 2px 8px; margin: -2px -6px 0 0; }
+.agenda .ag-day { margin-bottom: 16px; }
+.ag-head { display: flex; align-items: center; justify-content: space-between; margin: 0 2px 8px; }
+.ag-head h3 { font-size: 16px; }
+.agenda .diary-card { margin: 0 0 10px; }
+.ag-busy { font-size: 13.5px; color: var(--ink-2); background: #e9eef2; border: 1px dashed #c2ced8; border-radius: var(--radius-s); padding: 8px 10px; margin-bottom: 8px; }
+.menu button.danger { color: var(--red); }
+.menu button.danger svg { color: var(--red); }
+body { overflow-x: clip; }
+
+@media (max-width: 760px) {
+  html { -webkit-text-size-adjust: 100%; }
+  body { padding-bottom: env(safe-area-inset-bottom); }
+  .desk-only, .desk-only-inline { display: none !important; }
+  .page { padding: 4px 14px calc(150px + env(safe-area-inset-bottom)); }
+  .topbar { padding: calc(10px + env(safe-area-inset-top)) 14px 10px; gap: 10px; }
+  .search { max-width: none; }
+  .search input { padding: 11px 12px 11px 38px; font-size: 16px; } /* 16px stops iOS zooming in */
+  #new-btn { display: none; }
+  .today-head { margin: 8px 0 14px; gap: 10px; }
+  .today-head .date img { width: 36px; height: 36px; }
+
+  /* Bottom bar: five big targets, the More sheet holds the rest. */
+  .rail { padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(8px); }
+  .nav a, .more-btn { flex: 1; min-width: 0; min-height: 52px; justify-content: center; }
+  .more-btn { display: flex; flex-direction: column; align-items: center; gap: 2px; border: 0; background: none; font: inherit; font-size: 11px; font-weight: 600; color: var(--ink-2); padding: 6px 4px; border-radius: var(--radius-s); cursor: pointer; }
+  .more-btn svg { width: 19px; height: 19px; }
+  .more-btn.active { background: var(--sea-tint); color: var(--ink); }
+  .nav a.active { background: var(--sea-tint); }
+
+  /* Floating "new" button above the bottom bar. */
+  .fab { display: grid; place-items: center; position: fixed; right: 16px; bottom: calc(72px + env(safe-area-inset-bottom)); width: 58px; height: 58px; border-radius: 50%;
+    border: 0; background: var(--sea); color: #fff; box-shadow: 0 8px 22px rgba(35,103,158,.38); z-index: 45; cursor: pointer; }
+  .fab svg { width: 26px; height: 26px; }
+  .fab:active { transform: scale(.96); }
+  body[data-route="settings"] .fab { display: none; }
+
+  /* Menus become sheets that slide up from the bottom. */
+  .sheet-backdrop { position: fixed; inset: 0; background: rgba(21,49,75,.36); z-index: 59; animation: fade .12s ease-out; }
+  .menu.sheet { position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); top: auto; min-width: 0; border-radius: 16px; padding: 8px; max-height: 75vh; overflow: auto; animation: rise .16s ease-out; }
+  .menu.sheet button { padding: 14px 12px; font-size: 16px; }
+  .menu.sheet .sheet-title { padding: 8px 12px 6px; font-size: 13px; color: var(--ink-3); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .menu.sheet .sheet-cancel { justify-content: center; margin-top: 6px; border-top: 1px solid var(--line-soft); border-radius: 0 0 10px 10px; color: var(--sea-dark); }
+
+  /* Dialogs fill the screen from the bottom, with the buttons always in reach. */
+  .backdrop { padding: 0; place-items: end stretch; }
+  .modal, .modal.wide { max-width: none; width: 100%; border-radius: 16px 16px 0 0; max-height: 96dvh; display: flex; flex-direction: column; animation: rise .18s ease-out; }
+  .modal .modal-form { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+  .modal-head { padding: 16px 16px 4px; }
+  .modal-body { padding: 10px 16px 6px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .modal-foot { padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line-soft); background: var(--surface); flex-wrap: wrap; }
+  .modal-foot .btn { flex: 1; min-height: 46px; }
+  .modal-foot .spacer { display: none; }
+  .field input, .field select, .field textarea, input.input, select.input, textarea.input { font-size: 16px; min-height: 44px; }
+  .chip { padding: 9px 13px; font-size: 14.5px; }
+
+  /* Bigger touch targets everywhere. */
+  .btn { min-height: 42px; }
+  .btn.small { min-height: 36px; }
+  .btn.icon { width: 40px; height: 40px; }
+  .tick { width: 26px; height: 26px; }
+  .t-actions { opacity: 1; gap: 4px; }
+
+  /* Today */
+  .dash-half { grid-template-columns: 1fr; }
+  .task { margin: 0 10px 8px; }
+  .diary-card { margin: 0 12px 10px; }
+  .mini-list { padding: 0 14px 12px; }
+  .mini-list li { flex-wrap: wrap; }
+  .panel-head { padding: 14px 14px 8px; flex-wrap: wrap; }
+  .panel-body { padding: 0 14px 14px; }
+
+  /* Lists become cards. */
+  .m-cards { display: flex; flex-direction: column; gap: 8px; list-style: none; margin: 0; padding: 0; }
+  .m-card { display: flex; align-items: stretch; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .m-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 12px 14px; color: var(--ink); text-align: left; background: none; border: 0; font: inherit; cursor: pointer; }
+  .m-main:hover { text-decoration: none; background: var(--surface-2); }
+  .m-main b { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-sub { font-size: 13.5px; color: var(--ink-2); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-call { display: grid; place-items: center; width: 56px; flex: none; border-left: 1px solid var(--line-soft); color: var(--green); }
+  .m-call svg { width: 22px; height: 22px; }
+  .table-wrap.desk-only, table.desk-only { display: none; }
+  .pager { padding: 14px 0; }
+
+  /* Contacts filters fold away behind one button. */
+  .contacts-filters { flex-direction: column; align-items: stretch; }
+  .contacts-filters > * { width: 100% !important; min-width: 0 !important; }
+  .contacts-filters > :not(.filter-toggle) { display: none; }
+  .contacts-filters.open > * { display: block; }
+  .contacts-filters.open > .spacer { display: none; }
+  .contacts-filters label select { width: 100%; margin-top: 4px; }
+  .filter-toggle { justify-content: center; }
+
+  /* Contact page */
+  .c-head { gap: 12px; }
+  .avatar { width: 48px; height: 48px; font-size: 17px; }
+  .c-title { min-width: 0; flex: 1 1 calc(100% - 70px); }
+  .c-title .line { gap: 8px; }
+  .actionbar { display: grid; grid-template-columns: repeat(4, 1fr); width: 100%; gap: 6px; }
+  .actionbar .btn { flex-direction: column; gap: 2px; font-size: 12.5px; padding: 8px 4px; min-height: 58px; }
+  .actionbar .btn svg { width: 20px; height: 20px; }
+  .kv { grid-template-columns: 100px minmax(0, 1fr); padding: 0 14px 14px; }
+  .note-box { padding: 12px 14px; }
+  .note-box .row { flex-wrap: wrap; }
+  .timeline { padding: 4px 14px 14px; }
+  .deal { margin: 0 12px 10px; }
+  .dup-banner { flex-direction: column; align-items: flex-start; }
+
+  /* Diary */
+  .cal-wrap { grid-template-columns: 1fr; }
+  .side-panel { position: static; max-height: none; }
+  .side-task { margin: 0 12px 8px; cursor: default; }
+  .legend { display: none; }
+  .today-head .seg { flex: 1; }
+  .today-head .seg button { flex: 1; min-height: 40px; }
+  .cal-body { max-height: 70vh; }
+
+  /* Funnel page: one stage at a time. */
+  .stage-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .stage-tabs .n { opacity: .7; margin-left: 2px; }
+  .board.one { display: block; overflow: visible; }
+  .board.one .col { max-height: none; min-height: 0; background: none; padding: 0; }
+  .board.one .col-head { padding: 0 2px 8px; }
+  .card { cursor: default; }
+
+  /* Duplicates */
+  .dup-cards { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+  .dup-card { display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .dup-card input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--sea); flex: none; }
+  .dup-card > span { min-width: 0; }
+
+  /* Settings */
+  .settings-grid { grid-template-columns: 1fr; }
+  .today-head > .muted.small { flex-basis: 100%; }
+  .toasts { bottom: calc(140px + env(safe-area-inset-bottom)); left: 12px; right: 12px; transform: none; }
+  .toast { width: 100%; justify-content: space-between; }
+}
+@media (max-width: 760px) and (hover: none) { .f-row:hover .f-band { filter: none; } }
+@keyframes rise { from { transform: translateY(24px); opacity: 0; } }
+.settings-grid { grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
+/* Grid children may shrink below their content's natural width (stops long words widening the page). */
+.c-grid > *, .dash > *, .settings-grid > *, .cal-wrap > * { min-width: 0; }
+.kv dd, .t-title, .timeline .txt, .c-title h1 { overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .task { grid-template-columns: 5px 34px minmax(0, 1fr); }
+  .task .t-side { flex-wrap: wrap; row-gap: 4px; }
+  .t-meta { min-width: 0; }
+  .btn { max-width: 100%; white-space: normal; text-align: center; }
+  .seg { max-width: 100%; }
+  .seg button { white-space: nowrap; }
+  .today-head .seg { display: flex; }
+}
+@media (max-width: 760px) {
+  .topbar .spacer { display: none; }
+  .search { flex: 1; }
+  .today-head .spacer { display: none; }
+  .today-head .seg { flex: 1 1 auto; min-width: max-content; }
+  .today-head .seg button { flex: 1; }
+  .f-head .seg { width: 100%; }
+  .f-head .seg button { flex: 1; }
+}

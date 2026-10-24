@@ -35,7 +35,7 @@ export async function render(el) {
       <div class="date"><img src="/img/mark.png" alt=""><div><h1>${esc(fmtDate(d.today, { long: true, year: false }))}</h1>
         <div class="day-sub">${greet}. ${esc(summary.charAt(0).toUpperCase() + summary.slice(1))}.</div></div></div>
       <div class="spacer"></div>
-      <button class="btn" data-addtask>+ Task</button><button class="btn" data-book>+ Appointment</button>
+      <span class="desk-only-inline"><button class="btn" data-addtask>+ Task</button> <button class="btn" data-book>+ Appointment</button></span>
     </div>
 
     <div class="dash">
@@ -67,7 +67,7 @@ export async function render(el) {
       <div class="panel-body" data-funnel></div>
     </section>
 
-    <div class="dash" style="margin-top:20px;grid-template-columns:1fr 1fr">
+    <div class="dash dash-half" style="margin-top:20px">
       <section class="panel" aria-labelledby="warm-h">
         <div class="panel-head"><h2 id="warm-h">Warm leads untouched for 7+ days</h2><span class="badge ${d.warm.count ? 'amber' : ''}">${d.warm.count}</span></div>
         ${d.warm.count ? `<ul class="mini-list">${d.warm.top.map(c => `<li><span><a href="#/contacts/${c.id}"><b>${esc(fullName(c))}</b></a> <span class="faint small">${esc(c.stage)}${c.lead_source ? ' · ' + esc(c.lead_source) : ''}</span></span>
