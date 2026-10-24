@@ -26,24 +26,24 @@ export function funnelHtml(f) {
     const inset = Math.max(0, ((1 - next / w) / 2) * 100).toFixed(1);
     const [bg, fg] = BANDS[s.stage] || ['#2f7fbf', '#fff'];
     const link = s.stage === 'Completed' ? '#/funnel' : `#/contacts?stage=${encodeURIComponent(s.stage)}`;
-    return `<a class="f-row" href="${link}" aria-label="${esc(s.stage)}: ${s.reached} reached, ${s.now} here now">
-      <div class="f-track"><div class="f-band" style="width:${w}%;--inset:${inset}%;background:${bg};color:${fg}"><span class="f-name">${esc(s.stage)}</span><b>${s.reached}</b></div></div>
-      <div class="f-side"><span class="f-mname">${esc(s.stage)}</span>${i === 0 ? `<b>${s.reached}</b> ${s.reached === 1 ? 'deal' : 'deals'} opened` : `<b>${s.conversion}%</b> of the stage above`}
-        <span>${s.stage === 'Completed' ? `${s.now} sold` : `${s.now} here now`}${s.value ? ` · ${money(s.value)}` : ''}</span></div>
+    return `<a class="f-row" href="${link}" aria-label="${esc(s.stage)}: ${s.reached} reached, ${s.now} ${i === 0 ? 'not yet booked' : 'here now'}">
+      <div class="f-track"><div class="f-band" style="width:${w}%;--inset:${inset}%;background:${bg};color:${fg}"><span class="f-name">${esc(s.stage)}</span><b>${s.reached.toLocaleString('en-GB')}</b></div></div>
+      <div class="f-side"><span class="f-mname">${esc(s.stage)}</span>${i === 0 ? `<b>${s.reached.toLocaleString('en-GB')}</b> ${s.reached === 1 ? 'enquiry' : 'enquiries'}` : `<b>${s.conversion}%</b> of the stage above`}
+        <span>${s.stage === 'Completed' ? `${s.now} sold` : i === 0 ? `${s.now.toLocaleString('en-GB')} not yet booked` : `${s.now} here now`}${s.value ? ` · ${money(s.value)}` : ''}</span></div>
     </a>`;
   }).join('');
   const rate = f.stages[0].reached ? Math.round(100 * completed.reached / f.stages[0].reached) : 0;
   const lost = f.lost ? `${plural(f.lost, 'deal')} lost${f.topLost.length ? ': ' + f.topLost.map(l => `${esc(l.reason)} (${l.n})`).join(', ') : ''}` : 'No deals lost';
   return `<div class="funnel">${rows}</div>
-    <div class="f-foot"><span><b>${rate}%</b> of deals opened ${periodLabel(f.period)} became sales</span><span>${lost}</span></div>`;
+    <div class="f-foot"><span><b>${rate < 1 && completed.reached ? '<1' : rate}%</b> of enquiries ${periodLabel(f.period)} became sales</span><span>${lost}</span></div>`;
 }
 
 // Renders the funnel panel body into `holder` with a period switch; remembers the chosen period.
 export function mountFunnel(holder, data) {
   const draw = f => {
-    holder.innerHTML = `<div class="f-head"><span class="muted small">${f.total ? `${plural(f.total, 'deal')} opened ${periodLabel(f.period)}` : `No deals opened ${periodLabel(f.period)}`}</span>
+    holder.innerHTML = `<div class="f-head"><span class="muted small">${f.total ? `${f.total.toLocaleString('en-GB')} ${f.total === 1 ? 'enquiry' : 'enquiries'} ${periodLabel(f.period)}` : `No enquiries ${periodLabel(f.period)}`}</span>
       <div class="seg" role="group" aria-label="Period">${PERIODS.map(([v, l]) => `<button type="button" data-period="${v}" class="${f.period === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
-      ${f.total ? funnelHtml(f) : '<div class="empty small">Deals appear here as enquiries come in.</div>'}`;
+      ${f.total ? funnelHtml(f) : '<div class="empty small">The funnel fills in as enquiries come in.</div>'}`;
     holder.querySelectorAll('[data-period]').forEach(b => b.addEventListener('click', async () => draw(await get(`/api/funnel?period=${b.dataset.period}&remember=1`))));
   };
   draw(data);

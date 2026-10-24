@@ -181,6 +181,15 @@ test('the funnel counts how far deals got, including lost ones', () => {
   assert.ok(f.topLost.some(l => l.reason === 'Park not right for customer'));
   assert.ok(by.Completed.reached >= 1); // the deal completed by handover earlier in these tests
   assert.equal(by['Finance & Paperwork'].conversion, Math.round(100 * by['Finance & Paperwork'].reached / by['Park Tour'].reached));
+  // Every lead counts at the top, even with no deal; each person once.
+  const leads = db.prepare("SELECT COUNT(*) n FROM contacts WHERE type <> 'Partner'").get().n;
+  assert.equal(f.total, leads);
+  const before = L.funnel('all').total;
+  insert('contacts', { first_name: 'Brand', last_name: 'New', enquiry_date: day + 'T10:00' });
+  insert('contacts', { first_name: 'Old', last_name: 'Lead', enquiry_date: '2023-03-01T10:00' });
+  assert.equal(L.funnel('all').total, before + 2);
+  assert.equal(L.funnel('30').stages[0].reached, L.funnel('30').total);
+  assert.ok(L.funnel('30').total < L.funnel('all').total);
 });
 
 test('databases from the earlier version are migrated to the new stages', async () => {

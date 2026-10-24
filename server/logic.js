@@ -267,29 +267,44 @@ function ensureDeal(contactId) {
   return id;
 }
 
-// The sales funnel: of the deals opened in the period, how many reached each stage (including those
-// that went on to be completed or were later lost), how many sit there now, and their value.
+// The sales funnel. The top counts every enquiry in the period – each lead (contact) whose enquiry
+// date falls in it, whether or not a deal was opened – plus anyone whose deal was opened in it.
+// Each person is counted once, at the furthest stage any of their deals reached (lost deals still
+// count towards the stages they got to). "Here now" and values come from their open deals.
 const FUNNEL_STAGES = [...OPEN_STAGES, 'Completed'];
 function funnel(period = '90') {
   const days = { '30': 30, '90': 90, '365': 365 }[String(period)];
   const since = days ? U.addDays(U.today(), -days) : '0000-00-00';
-  const rows = db.prepare(`SELECT stage, furthest_stage, lost_reason, COALESCE(price,0) - COALESCE(part_ex_allowance,0) AS value
-                           FROM deals WHERE substr(created_at,1,10) >= ?`).all(since);
   const idx = st => FUNNEL_STAGES.indexOf(st);
+  const contacts = db.prepare(`SELECT id, substr(COALESCE(enquiry_date, created_at),1,10) AS d FROM contacts WHERE type <> 'Partner'`).all();
+  const deals = db.prepare(`SELECT contact_id, stage, furthest_stage, lost_reason, substr(created_at,1,10) AS created,
+                            COALESCE(price,0) - COALESCE(part_ex_allowance,0) AS value FROM deals`).all();
+  const byContact = new Map();
+  for (const d of deals) { if (!byContact.has(d.contact_id)) byContact.set(d.contact_id, []); byContact.get(d.contact_id).push(d); }
   const stages = FUNNEL_STAGES.map(stage => ({ stage, reached: 0, now: 0, value: 0 }));
   const lostReasons = {};
-  let lost = 0;
-  for (const r of rows) {
-    const far = r.furthest_stage || (r.stage === 'Lost' ? 'Enquiry' : r.stage);
-    const reach = Math.max(0, idx(far));
+  let lost = 0, total = 0;
+  for (const c of contacts) {
+    const all = byContact.get(c.id) || [];
+    const inPeriod = c.d >= since;
+    // Deals that belong to this period: opened in it, or still open for someone who enquired in it.
+    const mine = all.filter(d => d.created >= since || (inPeriod && !['Completed', 'Lost'].includes(d.stage)));
+    if (!inPeriod && !mine.length) continue;
+    total++;
+    let reach = 0, openAt = mine.length ? -1 : 0;
+    for (const d of mine) {
+      const far = d.furthest_stage || (d.stage === 'Lost' ? 'Enquiry' : d.stage);
+      reach = Math.max(reach, idx(far));
+      if (d.stage === 'Lost') { lost++; const k = d.lost_reason || 'No reason given'; lostReasons[k] = (lostReasons[k] || 0) + 1; continue; }
+      const at = idx(d.stage);
+      if (at >= 0) { stages[at].value += d.value || 0; openAt = Math.max(openAt, at); }
+    }
     for (let i = 0; i <= reach; i++) stages[i].reached++;
-    if (r.stage === 'Lost') { lost++; const k = r.lost_reason || 'No reason given'; lostReasons[k] = (lostReasons[k] || 0) + 1; continue; }
-    const at = idx(r.stage);
-    if (at >= 0) { stages[at].now++; stages[at].value += r.value || 0; }
+    if (openAt >= 0) stages[openAt].now++;
   }
   stages.forEach((s, i) => { s.conversion = i === 0 ? null : (stages[i - 1].reached ? Math.round(100 * s.reached / stages[i - 1].reached) : 0); });
   const topLost = Object.entries(lostReasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([reason, n]) => ({ reason, n }));
-  return { period: days ? String(days) : 'all', since: days ? since : null, total: rows.length, stages, lost, topLost };
+  return { period: days ? String(days) : 'all', since: days ? since : null, total, stages, lost, topLost };
 }
 
 /* ---------------------------------------------------------- appointments */
