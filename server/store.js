@@ -65,8 +65,9 @@ function netlifyStore() {
     },
     async listBackups() { await load(); const { blobs } = await store().list({ prefix: 'backups/' }); return blobs.map(b => b.key).sort().reverse(); },
     async readBackup(key) { await load(); const d = await store().get(key, { type: 'arrayBuffer' }); return d ? Buffer.from(d) : null; },
-    async setFlag(reason) { await load(); await store().set(FLAG_KEY, reason || '1'); },
-    async takeFlag() { await load(); const s = store(); const v = await s.get(FLAG_KEY, { type: 'text' }); if (v === null || v === undefined) return null; await s.delete(FLAG_KEY); return v; }
+    // One flag per person: "your Outlook calendar changed, sync it".
+    async setFlag(reason, uid) { await load(); await store().set(`${FLAG_KEY}/${uid || 0}`, reason || '1'); },
+    async takeFlag(uid) { await load(); const s = store(), k = `${FLAG_KEY}/${uid || 0}`; const v = await s.get(k, { type: 'text' }); if (v === null || v === undefined) return null; await s.delete(k); return v; }
   };
 }
 
@@ -93,8 +94,8 @@ function fileStore(dir) {
     },
     async listBackups() { return fs.readdirSync(path.join(dir, 'backups')).map(f => 'backups/' + f).sort().reverse(); },
     async readBackup(key) { const f = path.join(dir, key); return fs.existsSync(f) && f.startsWith(dir) ? fs.readFileSync(f) : null; },
-    async setFlag(reason) { fs.writeFileSync(flag, reason || '1'); },
-    async takeFlag() { if (!fs.existsSync(flag)) return null; const v = fs.readFileSync(flag, 'utf8'); fs.rmSync(flag, { force: true }); return v; }
+    async setFlag(reason, uid) { fs.writeFileSync(`${flag}-${uid || 0}`, reason || '1'); },
+    async takeFlag(uid) { const f = `${flag}-${uid || 0}`; if (!fs.existsSync(f)) return null; const v = fs.readFileSync(f, 'utf8'); fs.rmSync(f, { force: true }); return v; }
   };
 }
 

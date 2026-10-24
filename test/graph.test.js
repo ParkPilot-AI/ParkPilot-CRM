@@ -58,7 +58,7 @@ const server = http.createServer((req, res) => {
   });
 });
 
-let graph, L, D, U;
+let graph, L, D, U, uid, other;
 test.before(async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
@@ -68,6 +68,10 @@ test.before(async () => {
   process.env.GRAPH_CLIENT_SECRET = 'test-secret';
   D = require('../server/db'); L = require('../server/logic'); graph = require('../server/graph'); U = require('../server/util');
   await D.open();
+  // Two people on the team; the tests act as the first (whose Outlook gets connected).
+  uid = D.insert('users', { email: 'sales@coastfields.test', name: 'Sales Office', role: 'manager', park_id: 1 });
+  other = D.insert('users', { email: 'sam@coastfields.test', name: 'Sam', role: 'exec', park_id: 1 });
+  require('../server/access').ctx.user = D.get('users', uid);
   graph.setOrigin('https://coastfields.example.net');
 });
 
@@ -82,17 +86,20 @@ test('sign-in with PKCE stores tokens and the account', async () => {
   assert.ok(graph.isConnected());
   assert.equal(graph.status().account.email, 'sales@coastfields.test');
   // The refresh token is stored encrypted, never in plain text.
-  assert.ok(!JSON.stringify(D.getState('msTokens')).includes('RT'));
+  assert.ok(!JSON.stringify(D.getState(`msTokens:${uid}`)).includes('RT'));
+  assert.equal(graph.isConnected(other), false, 'connecting is per person');
   // Live updates: a subscription pointing at the portal's notify address.
   assert.equal(mock.subscription.notificationUrl, 'https://coastfields.example.net/api/graph/notify');
   assert.equal(mock.subscription.resource, '/me/events');
-  assert.equal(graph.checkNotification({ value: [{ clientState: mock.subscription.clientState, changeType: 'updated' }] }), 'changed');
+  assert.deepEqual(graph.checkNotification({ value: [{ clientState: mock.subscription.clientState, changeType: 'updated' }] }), [{ uid, kind: 'changed' }]);
   assert.equal(graph.checkNotification({ value: [{ clientState: 'forged', changeType: 'updated' }] }), null);
+  // Someone else's id with this person's signature is refused too.
+  assert.equal(graph.checkNotification({ value: [{ clientState: mock.subscription.clientState.replace(/^\d+/, String(other)), changeType: 'updated' }] }), null);
 });
 
 let contactId, apptId;
 test('booking pushes an Outlook event with invite, Teams link and CRM id', async () => {
-  contactId = D.insert('contacts', { first_name: 'Ann', last_name: 'Shore', email: 'ann@example.com' });
+  contactId = D.insert('contacts', { first_name: 'Ann', last_name: 'Shore', email: 'ann@example.com', park_id: 1, owner_id: uid });
   apptId = L.createAppointment({ type: 'Teams call', start: `${U.addDays(U.today(), 3)}T15:30`, contact_id: contactId });
   await settle();
   const a = D.get('appointments', apptId);
@@ -102,6 +109,17 @@ test('booking pushes an Outlook event with invite, Teams link and CRM id', async
   assert.equal(e.start.timeZone, 'Europe/London');
   assert.equal(e.singleValueExtendedProperties[0].value, String(apptId));
   assert.ok(a.teams_url.startsWith('https://teams.test/'));
+});
+
+test('an appointment in the diary of someone not connected stays in the portal only', async () => {
+  const before = mock.events.size;
+  const id = L.createAppointment({ type: 'Park tour', start: `${U.addDays(U.today(), 3)}T10:00`, contact_id: contactId, owner_id: other });
+  await settle();
+  assert.equal(D.get('appointments', id).sync_status, 'Local');
+  assert.equal(mock.events.size, before);
+  // Its prep and follow-up tasks are Sam's, not on the connected person's To Do.
+  assert.ok(D.db.prepare("SELECT COUNT(*) n FROM tasks WHERE appointment_id = ? AND owner_id = ?").get(id, other).n >= 1);
+  L.cancelAppointment(id, {});
 });
 
 test('delta pull ignores our own echo, then applies a move made in Outlook', async () => {

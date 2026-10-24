@@ -1,4 +1,4 @@
-import { get, patch, esc, state, today, addDays, parts, fmtDate, fmtTime, fullName, minutes, hhmm, nowLocal, toast, changed, typeClass, fmtDay, isPhone } from '../core.js';
+import { get, patch, esc, state, today, addDays, parts, fmtDate, fmtTime, fullName, minutes, hhmm, nowLocal, toast, changed, typeClass, fmtDay, isPhone, isMgr, me, teamOptions, personName } from '../core.js';
 import { bookDialog, apptDialog } from '../dialogs.js';
 import { diaryCard, bindDiary } from './parts.js';
 
@@ -6,6 +6,7 @@ let mode = 'week';      // desktop: day, week or month
 let phoneMode = 'agenda'; // phones: day or agenda (the next two weeks as a list)
 let anchor = null;
 let showOutlook = true;
+let who = null; // managers can look at someone else's diary (null = their own)
 const PX = 48 / 60; // pixels per minute
 const MO = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -13,6 +14,10 @@ const mondayOf = d => addDays(d, -((parts(d).wd + 6) % 7));
 
 export async function render(el, { query }) {
   if (query.date) anchor = query.date;
+  if (query.user) who = Number(query.user) || null;
+  if (who && !isMgr()) who = null;
+  const forParam = who ? `&user=${who}` : '';
+  const book = (opts = {}) => bookDialog({ ownerId: who, ...opts });
   if (!anchor) anchor = today();
   const s = state.meta.settings;
   const phone = isPhone();
@@ -23,8 +28,8 @@ export async function render(el, { query }) {
   else if (view === 'week') { from = mondayOf(anchor); to = addDays(from, 6); }
   else { const p = parts(anchor); const first = `${p.y}-${String(p.m).padStart(2, '0')}-01`; from = mondayOf(first); to = addDays(from, 41); }
   const [data, tasks] = await Promise.all([
-    get(`/api/appointments?from=${from}&to=${to}&outlook=${showOutlook ? 1 : 0}&cancelled=1`),
-    get('/api/tasks?scope=open')
+    get(`/api/appointments?from=${from}&to=${to}&outlook=${showOutlook ? 1 : 0}&cancelled=1${forParam}`),
+    get('/api/tasks?scope=open' + forParam)
   ]);
   const days = []; for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);
   const unscheduled = tasks.filter(t => t.due_date && t.due_date <= addDays(today(), 7)).slice(0, 30);
@@ -34,11 +39,13 @@ export async function render(el, { query }) {
     : `${fmtDate(from)} – ${fmtDate(to)}`;
 
   el.innerHTML = `
-    <div class="today-head"><h1>Diary</h1><span class="muted">${esc(title)}</span><div class="spacer"></div>
+    <div class="today-head"><h1>${who && who !== me().id ? `${esc(personName(who))}’s diary` : 'Diary'}</h1><span class="muted">${esc(title)}</span><div class="spacer"></div>
       <div class="seg" role="group" aria-label="View">${(phone ? ['day', 'agenda'] : ['day', 'week', 'month']).map(m => `<button type="button" data-mode="${m}" class="${view === m ? 'on' : ''}">${m === 'agenda' ? 'Next 2 weeks' : m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div>
       <div class="seg"><button type="button" data-nav="-1" aria-label="Previous">‹</button><button type="button" data-nav="0">Today</button><button type="button" data-nav="1" aria-label="Next">›</button></div>
       <button class="btn primary desk-only" data-book>+ Appointment</button>
     </div>
+    ${isMgr() ? `<div class="toolbar diary-for"><label class="small muted">Diary for <select data-who aria-label="Whose diary">${teamOptions(who || me().id)}</select></label>
+      ${who && who !== me().id ? `<span class="faint small">${data.outlookConnected ? 'Their Outlook is connected.' : 'Their Outlook isn’t connected, so only appointments booked here show.'}</span>` : ''}</div>` : ''}
     <div class="toolbar">
       <div class="legend">${state.meta.apptTypes.map(t => `<span class="${typeClass(t)}"><i></i>${esc(t)}</span>`).join('')}${showOutlook ? '<span><i style="background:#e6ebef;border:1px dashed #b7c4cf"></i>Other Outlook events</span>' : ''}</div>
       <div class="spacer"></div>
@@ -64,17 +71,18 @@ export async function render(el, { query }) {
     else { const p = parts(anchor); const dt = new Date(Date.UTC(p.y, p.m - 1 + n, 1)); anchor = dt.toISOString().slice(0, 10); }
     render(el, { query: {} });
   }));
-  el.querySelector('[data-book]').onclick = () => bookDialog();
+  el.querySelector('[data-book]').onclick = () => book();
+  el.querySelector('[data-who]')?.addEventListener('change', e => { who = Number(e.target.value) === me().id ? null : Number(e.target.value); render(el, { query: {} }); });
   const bookTask = (taskId, start = null) => {
     const t = tasks.find(x => String(x.id) === String(taskId));
     if (!t) return;
-    bookDialog({ start, contact: t.contact_id ? { id: t.contact_id, first_name: t.first_name, last_name: t.last_name, email: t.contact_email } : null,
+    book({ start, contact: t.contact_id ? { id: t.contact_id, first_name: t.first_name, last_name: t.last_name, email: t.contact_email } : null,
       type: t.category === 'Call' ? 'Phone call' : 'Park tour', title: t.title, notes: t.notes || '' });
   };
   el.querySelectorAll('[data-booktask]').forEach(b => b.addEventListener('click', () => bookTask(b.dataset.booktask)));
   if (view === 'agenda') {
     bindDiary(el.querySelector('#cal'));
-    el.querySelectorAll('[data-dayadd]').forEach(b => b.addEventListener('click', () => bookDialog({ start: `${b.dataset.dayadd}T10:00` })));
+    el.querySelectorAll('[data-dayadd]').forEach(b => b.addEventListener('click', () => book({ start: `${b.dataset.dayadd}T10:00` })));
     return;
   }
   el.querySelector('[data-outlook]').onchange = e => { showOutlook = e.target.checked; render(el, { query: {} }); };
@@ -106,7 +114,7 @@ export async function render(el, { query }) {
     col.addEventListener('click', e => {
       if (e.target.closest('.ev')) return;
       const m = minuteAt(col, e.clientY);
-      bookDialog({ start: `${col.dataset.day}T${hhmm(Math.floor(m / 15) * 15)}` });
+      book({ start: `${col.dataset.day}T${hhmm(Math.floor(m / 15) * 15)}` });
     });
     col.addEventListener('mousemove', e => { if (!e.target.closest('.ev')) showHint(col, Math.floor(minuteAt(col, e.clientY) / 15) * 15); });
     col.addEventListener('mouseleave', clearHint);

@@ -1,4 +1,4 @@
-import { state, get, loadMeta, esc, popMenu, fullName, bus, toast, isPhone, closeOverlays } from './core.js';
+import { state, get, loadMeta, esc, popMenu, fullName, bus, toast, isPhone, closeOverlays, isMgr, isGroupMgr, me } from './core.js';
 import { taskDialog, bookDialog, noteDialog, contactDialog } from './dialogs.js';
 import * as today from './views/today.js';
 import * as contacts from './views/contacts.js';
@@ -8,12 +8,17 @@ import * as funnel from './views/funnel.js';
 import * as stock from './views/stock.js';
 import * as settings from './views/settings.js';
 import * as duplicates from './views/duplicates.js';
+import * as captain from './views/captain.js';
 
 const view = document.getElementById('view');
 let current = null;
 
+// Managers land on the Captain's Log; their own day is under "My day".
+const home = { render: (el, ctx) => (isMgr() ? captain : today).render(el, ctx) };
 const ROUTES = [
-  [/^\/?$/, today, 'today'],
+  [/^\/?$/, home, 'home'],
+  [/^\/today$/, today, 'today'],
+  [/^\/log$/, captain, 'log'],
   [/^\/contacts\/duplicates$/, duplicates, 'contacts'],
   [/^\/contacts\/(\d+)$/, contact, 'contacts'],
   [/^\/contacts$/, contacts, 'contacts'],
@@ -31,9 +36,11 @@ function parseHash() {
 
 async function render({ keepScroll = false } = {}) {
   const { path, query } = parseHash();
-  const r = ROUTES.find(([re]) => re.test(path)) || ROUTES[0];
+  let r = ROUTES.find(([re]) => re.test(path)) || ROUTES[0];
   const match = path.match(r[0]);
-  const navKey = isPhone() && ['stock', 'settings'].includes(r[2]) ? 'more' : r[2];
+  let key = r[2] === 'home' ? (isMgr() ? 'log' : 'today') : r[2];
+  const navKey = isPhone() && (['stock', 'settings'].includes(key) || (key === 'funnel' && isMgr())) ? 'more' : key;
+  r = [r[0], r[1], key];
   document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === navKey || (a.dataset.nav === r[2] && !isPhone())));
   document.body.dataset.route = r[2];
   const same = current && current.mod === r[1] && current.path === path;
@@ -56,9 +63,18 @@ async function updateRail() {
     const foot = document.getElementById('rail-foot');
     const cls = !st.connected ? '' : st.lastError || st.errors ? 'warn' : 'ok';
     const label = !st.connected ? 'Outlook not connected' : st.lastError ? 'Outlook sync problem' : st.errors ? `${st.errors} not sent to Outlook` : 'Outlook connected';
-    const who = state.meta.hosted && state.meta.user ? `<div style="margin-top:10px;line-height:1.4"><span class="faint">${esc(state.meta.user.name || state.meta.user.email)}</span><br><a href="/auth/logout">Sign out</a></div>` : '';
+    const u = state.meta.user;
+    const who = u ? `<div style="margin-top:10px;line-height:1.4"><span class="faint">${esc(u.name || u.email)}</span><br><span class="faint small">${esc(u.roleLabel)}${u.park_name && !u.isGroup ? ', ' + esc(u.park_name) : ''}</span><br><a href="/auth/logout">Sign out</a></div>` : '';
     foot.innerHTML = `<a class="sync-pill" href="#/settings"><span class="dot ${cls}"></span>${esc(label)}</a>${who}`;
   } catch { /* offline */ }
+}
+
+// Shows the Captain's Log to managers, and labels their personal page "My day".
+function applyRole() {
+  document.body.classList.toggle('is-mgr', isMgr());
+  document.body.classList.toggle('is-group', isGroupMgr());
+  const t = document.querySelector('[data-nav=today]');
+  if (isMgr()) { t.href = '#/today'; t.querySelector('.lbl').textContent = 'My day'; }
 }
 
 /* -------------------------------------------------------- global search */
@@ -127,13 +143,16 @@ document.getElementById('fab').addEventListener('click', e => openNew(e.currentT
 // Phones: "More" holds the pages that don't fit in the bottom bar.
 document.getElementById('more-btn').addEventListener('click', e => {
   popMenu(e.currentTarget, [
+    ...(isMgr() ? [{ label: 'Funnel', icon: 'deal', run: () => { location.hash = '#/funnel'; } }] : []),
     { label: 'Homes and plots', icon: 'home', run: () => { location.hash = '#/stock'; } },
     { label: 'Settings', icon: 'edit', run: () => { location.hash = '#/settings'; } },
-    { label: 'Possible duplicates', icon: 'user', run: () => { location.hash = '#/contacts/duplicates'; } },
-    { label: 'Export contacts (CSV)', icon: 'note', run: () => { location.href = '/api/export/contacts.csv'; } },
+    ...(isMgr() ? [
+      { label: 'Team and parks', icon: 'user', run: () => { location.hash = '#/settings?section=team'; } },
+      { label: 'Possible duplicates', icon: 'user', run: () => { location.hash = '#/contacts/duplicates'; } },
+      { label: 'Export contacts (CSV)', icon: 'note', run: () => { location.href = '/api/export/contacts.csv'; } }] : []),
     '-',
     { label: 'Sign out', icon: 'x', danger: true, run: () => { location.href = '/auth/logout'; } }
-  ], { title: state.meta && state.meta.user ? `Signed in as ${state.meta.user.email}` : 'More' });
+  ], { title: me().email ? `${me().name || me().email} · ${me().roleLabel}` : 'More' });
 });
 
 // Keyboard shortcuts when not typing: / search, N note, T task, A appointment, C contact.
@@ -166,7 +185,7 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => navigato
 setInterval(() => { if (!document.querySelector('.backdrop') && document.visibilityState === 'visible') render({ keepScroll: true }); }, 120e3);
 
 (async () => {
-  try { await loadMeta(); }
+  try { await loadMeta(); applyRole(); }
   catch (e) {
     if (e.status === 403) return; // the no-access message is already showing
     if (e.status === 401) return; // on its way to the Microsoft sign-in page

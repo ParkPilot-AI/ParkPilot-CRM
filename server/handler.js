@@ -13,6 +13,7 @@ const L = require('./logic');
 const U = require('./util');
 const graph = require('./graph');
 const auth = require('./auth');
+const A = require('./access');
 
 const cache = { etag: undefined, isNew: false, backedUp: null };
 let chain = Promise.resolve();
@@ -62,8 +63,8 @@ async function handle({ method, path, search = '', headers = {}, body = null }) 
     if (query.validationToken) return { status: 200, headers: { 'Content-Type': 'text/plain' }, body: query.validationToken };
     let payload = null;
     try { payload = JSON.parse(body ? body.toString('utf8') : '{}'); } catch { /* ignore */ }
-    const kind = graph.checkNotification(payload);
-    if (kind) await getStore().setFlag(kind).catch(() => {});
+    const hits = graph.checkNotification(payload);
+    for (const h of hits || []) await getStore().setFlag(h.kind, h.uid).catch(() => {});
     return { status: 202, headers: {}, body: '' };
   }
 
@@ -75,14 +76,19 @@ async function handle({ method, path, search = '', headers = {}, body = null }) 
     catch (e) { return htmlPage(e.status || 500, 'Sign-in isn’t ready', e.message); }
   }
   if (path === '/auth/signin-callback') {
-    try { const r = await auth.finishLogin(origin, query, headers.cookie); return { status: 302, headers: { Location: r.location, 'Set-Cookie': r.setCookies, 'Cache-Control': 'no-store' }, body: '' }; }
+    let r;
+    try { r = await auth.finishLogin(origin, query, headers.cookie); }
     catch (e) { return htmlPage(e.status || 400, e.status === 403 ? 'No access' : 'Sign-in didn’t work', e.message, e.status === 403); }
+    // Check they are on the team before letting them in.
+    const ok = await inDb(() => !!A.resolveUser(r.email, r.name)).catch(e => { console.error(e); return null; });
+    if (ok === null) return htmlPage(500, 'Sign-in didn’t work', 'The portal could not check your access just now. Please try again in a moment.');
+    if (!ok) return htmlPage(403, 'No access', `${r.email} isn’t on the Coastfields Customer Portal team yet. Ask your sales manager to add you, then try again.`, true);
+    return { status: 302, headers: { Location: r.location, 'Set-Cookie': r.setCookies, 'Cache-Control': 'no-store' }, body: '' };
   }
   if (path === '/auth/logout') return { status: 302, headers: { Location: '/signed-out.html', 'Set-Cookie': auth.logout(origin), 'Cache-Control': 'no-store' }, body: '' };
 
   const session = auth.currentUser(headers.cookie, origin);
   if (!session.user) return json(session.status, { error: session.error, signIn: session.status === 401, noAccess: !!session.noAccess });
-  const user = session.user;
   const extra = session.renew ? { 'Set-Cookie': [session.renew] } : {};
 
   if (method !== 'GET' && headers['x-coastfields'] !== '1') return json(403, { error: 'Forbidden' });
@@ -97,18 +103,30 @@ async function handle({ method, path, search = '', headers = {}, body = null }) 
       try {
         await ensureLoaded(attempt > 0);
         const before = D.totalChanges();
+        A.ctx.user = null;
+        const me = A.resolveUser(session.user.email, session.user.name);
+        if (!me) {
+          if (D.totalChanges() > before) await save();
+          return json(403, { error: `${session.user.email} isn’t on the Coastfields Customer Portal team. Ask your sales manager to add you.`, noAccess: true });
+        }
+        A.ctx.user = me;
+        const user = me;
         graph.setOrigin(origin);
         L.maybeScheduledRollover();
         let result;
         if (path === '/api/ping') {
-          // Called every minute or so while the portal is open: picks up Outlook changes.
-          const flag = await getStore().takeFlag().catch(() => null);
+          // Called every minute or so while the portal is open: picks up this person's Outlook changes.
           let changed = false;
-          if (graph.isConnected() && (flag || graph.needsSync())) {
-            const r = await graph.syncNow({ budgetMs: 5e3, forceFresh: !!(flag && /missed|subscriptionRemoved/.test(flag)) });
-            changed = interesting(r.calendar);
+          if (graph.isConnected(me.id)) {
+            const flag = await getStore().takeFlag(me.id).catch(() => null);
+            await graph.as(me.id, async () => {
+              if (flag || graph.needsSync()) {
+                const r = await graph.syncNow({ budgetMs: 5e3, forceFresh: !!(flag && /missed|subscriptionRemoved/.test(flag)) });
+                changed = interesting(r.calendar);
+              }
+            });
           }
-          result = { changed, outlook: graph.status(), today: U.today() };
+          result = { changed, outlook: graph.status(me.id), today: U.today() };
         } else {
           const m = api.match(method, path);
           if (!m) return json(404, { error: 'Not found' });
@@ -116,12 +134,14 @@ async function handle({ method, path, search = '', headers = {}, body = null }) 
         }
         await graph.flush({ budgetMs: 5e3 });
         if (cache.isNew || D.totalChanges() > before) await save();
+        A.ctx.user = null;
         if (result && result.__raw) {
           const b = result.body;
           return { status: result.status, headers: { 'Cache-Control': 'no-store', ...extra, ...result.headers }, body: b };
         }
         return json(200, result === undefined ? { ok: true } : result, extra);
       } catch (e) {
+        A.ctx.user = null;
         if (e instanceof ConflictError && attempt < 2) continue;
         if (e instanceof ConflictError) return json(409, { error: 'Another change was being saved at the same moment. Please try again.' });
         // A failed request must not leave half-made changes in the cached copy.
@@ -132,6 +152,24 @@ async function handle({ method, path, search = '', headers = {}, body = null }) 
       }
     }
     return json(500, { error: 'Something went wrong' });
+  });
+}
+
+// Runs fn with the database loaded, saving if it changed (used outside the normal request flow).
+function inDb(fn) {
+  return withLock(async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await ensureLoaded(attempt > 0);
+        const before = D.totalChanges();
+        const r = await fn();
+        if (cache.isNew || D.totalChanges() > before) await save();
+        return r;
+      } catch (e) {
+        if (e instanceof ConflictError && attempt < 2) continue;
+        cache.etag = undefined; throw e;
+      }
+    }
   });
 }
 
@@ -153,10 +191,18 @@ async function runScheduled() {
         const before = D.totalChanges();
         graph.setOrigin(process.env.URL || '');
         L.maybeScheduledRollover();
-        let synced = null;
-        if (graph.isConnected()) {
-          const flag = await getStore().takeFlag().catch(() => null);
-          if (flag || graph.needsSync(9 * 60e3)) synced = await graph.syncNow({ budgetMs: 18e3, forceFresh: !!(flag && /missed|subscriptionRemoved/.test(flag)) });
+        A.ctx.user = null;
+        // Everyone's Outlook, a share of the time each (the ones not reached carry on next run).
+        const synced = {};
+        const users = graph.connectedUsers();
+        const t0 = Date.now();
+        for (const uid of users) {
+          if (Date.now() - t0 > 18e3) break;
+          const flag = await getStore().takeFlag(uid).catch(() => null);
+          await graph.as(uid, async () => {
+            if (flag || graph.needsSync(9 * 60e3)) synced[uid] = await graph.syncNow({ budgetMs: Math.max(3e3, 18e3 / users.length), forceFresh: !!(flag && /missed|subscriptionRemoved/.test(flag)) });
+            else await graph.ensureSubscription().catch(() => {});
+          });
         }
         await graph.flush({ budgetMs: 5e3 });
         if (cache.isNew || D.totalChanges() > before) await save();

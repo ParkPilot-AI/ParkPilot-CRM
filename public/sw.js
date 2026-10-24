@@ -2,11 +2,11 @@
 // Makes the portal installable as an app. It keeps a copy of the app's own files (styles,
 // scripts, images) to fall back on, and shows a clear message when there's no signal. Customer data (/api/*) and sign-in (/auth/*) always go to the server
 // and are never stored on the device.
-const VERSION = 'coastfields-v3';
+const VERSION = 'coastfields-v4';
 const SHELL = ['/', '/index.html', '/css/app.css', '/css/page.css', '/fonts/figtree.woff2', '/img/logo.png', '/img/mark.png', '/img/favicon.png',
   '/js/app.js', '/js/core.js', '/js/dialogs.js', '/js/views/today.js', '/js/views/contacts.js', '/js/views/contact.js', '/js/views/diary.js',
   '/js/views/funnel.js', '/js/views/funnelchart.js', '/js/views/stock.js', '/js/views/settings.js', '/js/views/duplicates.js',
-  '/js/views/parts.js', '/js/views/importui.js', '/offline.html', '/manifest.webmanifest'];
+  '/js/views/parts.js', '/js/views/importui.js', '/js/views/captain.js', '/offline.html', '/manifest.webmanifest'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

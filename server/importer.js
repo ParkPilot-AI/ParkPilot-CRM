@@ -44,7 +44,7 @@ function asDate(v) {
   return null;
 }
 
-function importRows(rows, { fileName = 'import' } = {}) {
+function importRows(rows, { fileName = 'import', parkId = null, ownerId = null } = {}) {
   if (!rows.length) throw new Error('The file is empty.');
   const map = mapHeaders(rows[0]);
   if (map.first_name === undefined && map.last_name === undefined && map.email === undefined)
@@ -92,7 +92,8 @@ function importRows(rows, { fileName = 'import' } = {}) {
       const id = insert('contacts', {
         external_id: ext, lead_no: leadNo, type: 'Prospect', first_name: first, last_name: last,
         mobile, phone_e164: normalisePhone(mobile), email, lead_source: source,
-        lead_status: active ? 'New' : 'Dormant', enquiry_date: enquiry, created_at: enquiry ? enquiry + ':00' : now
+        lead_status: active ? 'New' : 'Dormant', enquiry_date: enquiry, created_at: enquiry ? enquiry + ':00' : now,
+        park_id: parkId || (db.prepare('SELECT MIN(id) id FROM parks').get() || {}).id || null, owner_id: ownerId, assigned_at: ownerId ? now : null
       });
       insert('interactions', {
         contact_id: id, type: 'Note', at: enquiry || now.slice(0, 16),
@@ -111,10 +112,10 @@ function importRows(rows, { fileName = 'import' } = {}) {
   return stats;
 }
 
-function importFile(buf, fileName) {
+function importFile(buf, fileName, opts = {}) {
   const isCsv = /\.csv$/i.test(fileName) || (buf[0] !== 0x50 || buf[1] !== 0x4b);
   const { rows } = isCsv ? readCsv(buf.toString('utf8')) : readFirstSheet(buf);
-  return importRows(rows, { fileName });
+  return importRows(rows, { fileName, ...opts });
 }
 
 // Group contacts sharing an email address or phone number (union-find), ignoring dismissed pairs.

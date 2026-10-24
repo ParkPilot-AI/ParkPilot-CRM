@@ -1,4 +1,4 @@
-import { get, post, esc, fmtDate, fmtAgo, fmtDay, fmtTime, fullName, money, plural, nowLocal, toast, changed, state } from '../core.js';
+import { get, post, esc, fmtDate, fmtAgo, fmtDay, fmtTime, fullName, money, plural, nowLocal, toast, changed, state, isMgr } from '../core.js';
 import { taskDialog, bookDialog } from '../dialogs.js';
 import { taskRow, bindTasks, diaryCard, bindDiary } from './parts.js';
 import { importZone } from './importui.js';
@@ -26,13 +26,16 @@ export async function render(el) {
   }).join('') + (!nowShown && d.appts.length ? `<div class="now-line">Now, ${esc(now.slice(11))}</div>` : '')
     : `<div class="empty"><strong>Nothing booked today</strong>A quiet diary is a good time to call warm leads.</div>`;
 
-  const welcome = d.contactCount === 0 ? `<section class="panel" style="margin-bottom:20px" aria-labelledby="welcome-h">
+  const welcome = !isMgr() && d.contactCount === 0 ? `<div class="callout" style="margin-bottom:16px"><b>Welcome.</b> No leads have been allocated to you yet. Your sales manager hands them out, and anyone you add yourself is yours. Connect your Outlook in <a href="#/settings">Settings</a> so appointments go straight into your calendar.</div>`
+    : isMgr() && d.visibleCount === 0 ? `<section class="panel" style="margin-bottom:20px" aria-labelledby="welcome-h">
       <div class="panel-head"><h2 id="welcome-h">Welcome to the Coastfields Customer Portal</h2></div>
       <div class="panel-body"><p class="muted" style="margin-top:0">Start by importing your contacts from the previous CRM: drop the <b>My Opportunities</b> spreadsheet below. Enquiries from the last 90 days become open deals; older ones are kept as dormant contacts. Then connect Outlook under <a href="#/settings">Settings</a>.</p>
       <div data-welcome-import></div></div></section>` : '';
-  el.innerHTML = welcome + `
+  const pool = isMgr() && d.unallocated ? `<div class="callout pool-callout"><span><b>${plural(d.unallocated, 'lead')}</b> ${d.unallocated === 1 ? 'is' : 'are'} waiting to be allocated.</span>
+    <a class="btn small primary" href="#/contacts?owner=none">Allocate</a> <a class="btn small" href="#/log">Captain’s Log</a></div>` : '';
+  el.innerHTML = welcome + pool + `
     <div class="today-head">
-      <div class="date"><img src="/img/mark.png" alt=""><div><h1>${esc(fmtDate(d.today, { long: true, year: false }))}</h1>
+      <div class="date"><img src="/img/mark.png" alt=""><div><h1>${isMgr() ? 'My day: ' : ''}${esc(fmtDate(d.today, { long: true, year: false }))}</h1>
         <div class="day-sub">${greet}. ${esc(summary.charAt(0).toUpperCase() + summary.slice(1))}.</div></div></div>
       <div class="spacer"></div>
       <span class="desk-only-inline"><button class="btn" data-addtask>+ Task</button> <button class="btn" data-book>+ Appointment</button></span>
@@ -63,7 +66,7 @@ export async function render(el) {
     </div>
 
     <section class="panel" style="margin-top:20px" aria-labelledby="funnel-h">
-      <div class="panel-head"><h2 id="funnel-h">Sales funnel</h2><span class="faint small">${d.reserved.n ? `${money(d.reserved.v)} committed this month (${plural(d.reserved.n, 'deal')})` : 'No deposits or payments yet this month'}</span><div class="spacer"></div><a class="small" href="#/funnel">Open funnel</a></div>
+      <div class="panel-head"><h2 id="funnel-h">${isMgr() ? 'My sales funnel' : 'Sales funnel'}</h2><span class="faint small">${d.reserved.n ? `${money(d.reserved.v)} committed this month (${plural(d.reserved.n, 'deal')})` : 'No deposits or payments yet this month'}</span><div class="spacer"></div><a class="small" href="#/funnel">Open funnel</a></div>
       <div class="panel-body" data-funnel></div>
     </section>
 
@@ -85,7 +88,7 @@ export async function render(el) {
 
   const wi = el.querySelector('[data-welcome-import]');
   if (wi) importZone(wi, { onDone: () => setTimeout(() => changed(), 2500) });
-  mountFunnel(el.querySelector('[data-funnel]'), d.funnel);
+  mountFunnel(el.querySelector('[data-funnel]'), d.funnel, 'mine=1');
   bindTasks(el.querySelector('#todo'), [...d.overdue, ...d.dueToday, ...d.doneToday, ...d.upcoming]);
   bindDiary(el.querySelector('#diary-today'));
   el.querySelector('[data-toggle-done]')?.addEventListener('click', () => { showDone = !showDone; render(el); });

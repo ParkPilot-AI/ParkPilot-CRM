@@ -82,7 +82,7 @@ test('refuses accounts from another organisation, people not on the list, and re
   assert.equal(r.status, 403);
   r = await signIn({ preferred_username: 'stranger@coastfields.test' });
   assert.equal(r.status, 403);
-  assert.match(r.body, /does not have access/);
+  assert.match(r.body, /isn’t on the Coastfields Customer Portal team/);
   r = await signIn({ preferred_username: 'owner@coastfields.test', nonce: 'wrong' });
   assert.equal(r.status, 401);
   r = await signIn({ preferred_username: 'owner@coastfields.test', aud: 'some-other-app' });
@@ -101,13 +101,15 @@ test('a tampered or expired session cookie is rejected', async () => {
   assert.equal((await call('GET', '/api/meta', { cookie: `cf_session=${encodeURIComponent(old)}` })).status, 401);
 });
 
-test('removing someone from OWNER_EMAILS locks them out at once', async () => {
-  const before = process.env.OWNER_EMAILS;
-  process.env.OWNER_EMAILS = 'second@coastfields.test';
-  const r = await call('GET', '/api/meta');
+test('someone removed from the team is locked out at once, even with a live session', async () => {
+  const added = data(await call('POST', '/api/users', { body: { email: 'temp@coastfields.test', name: 'Temp', role: 'exec', park_id: 1 } }));
+  const auth = require('../server/auth');
+  const theirs = `cf_session=${encodeURIComponent(auth.seal({ email: 'temp@coastfields.test', name: 'Temp', iat: Date.now(), exp: Date.now() + 864e5 }))}`;
+  assert.equal((await call('GET', '/api/meta', { cookie: theirs })).status, 200);
+  assert.equal((await call('POST', `/api/users/${added.id}/remove`, { body: {} })).status, 200);
+  const r = await call('GET', '/api/meta', { cookie: theirs });
   assert.equal(r.status, 403);
   assert.ok(data(r).noAccess);
-  process.env.OWNER_EMAILS = before;
 });
 
 test('writes need the portal header (blocks cross-site form posts)', async () => {
@@ -145,17 +147,20 @@ test('importing the spreadsheet through the API, and the first-run count', async
   const r = await handle({ method: 'POST', path: '/api/import', headers: { ...ORIGIN_HEADERS, 'x-coastfields': '1', 'x-filename': 'leads.csv', 'content-type': 'application/octet-stream', cookie: cookieHeader() }, body: Buffer.from(csv) });
   assert.equal(r.status, 200);
   assert.equal(data(r).created, 1);
-  assert.equal(data(await call('GET', '/api/dashboard')).contactCount, 4);
+  // Imported leads arrive unallocated at the park, ready for a manager to hand out.
+  assert.equal(data(await call('GET', '/api/contacts')).total, 4);
+  assert.equal(data(await call('GET', '/api/contacts?owner=none&q=sands')).total, 1);
+  assert.ok(data(await call('GET', '/api/dashboard')).unallocated >= 1);
 });
 
 test('Outlook notification endpoint: validation, genuine-only, no sign-in needed', async () => {
   const v = await handle({ method: 'POST', path: '/api/graph/notify', search: '?validationToken=abc123', headers: {} });
   assert.equal(v.status, 200); assert.equal(v.body, 'abc123');
   await handle({ method: 'POST', path: '/api/graph/notify', headers: {}, body: Buffer.from(JSON.stringify({ value: [{ clientState: 'nope' }] })) });
-  assert.ok(!fs.existsSync(path.join(dir, 'sync-needed')));
-  const real = await handle({ method: 'POST', path: '/api/graph/notify', headers: {}, body: Buffer.from(JSON.stringify({ value: [{ clientState: graph.clientState(), changeType: 'updated' }] })) });
+  assert.ok(!fs.readdirSync(dir).some(f => f.startsWith('sync-needed')));
+  const real = await handle({ method: 'POST', path: '/api/graph/notify', headers: {}, body: Buffer.from(JSON.stringify({ value: [{ clientState: graph.clientStateFor(1), changeType: 'updated' }] })) });
   assert.equal(real.status, 202);
-  assert.ok(fs.existsSync(path.join(dir, 'sync-needed')));
+  assert.ok(fs.existsSync(path.join(dir, 'sync-needed-1')), 'flag set for that person');
 });
 
 test('the scheduled job runs the rollover and clears the Outlook flag', async () => {

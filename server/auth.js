@@ -6,8 +6,8 @@
 //                            sets an encrypted session cookie (14 days, renewed as you use it)
 //  /auth/logout           -> clears the session
 //
-// Only accounts in your organisation (GRAPH_TENANT_ID) can sign in, and if OWNER_EMAILS is set,
-// only those people. The ID token is taken straight from Microsoft's token endpoint over TLS using
+// Only accounts in your organisation (GRAPH_TENANT_ID) can sign in, and then only people on the
+// portal's team list (or in OWNER_EMAILS) – the request handler checks that against the database. The ID token is taken straight from Microsoft's token endpoint over TLS using
 // the app's client secret, so its contents can be trusted without a separate signature check
 // (OpenID Connect Core 1.0, section 3.1.3.7); the audience, tenant, nonce and expiry are still checked.
 const crypto = require('node:crypto');
@@ -30,7 +30,6 @@ function missing() {
   const c = cfg();
   return [['GRAPH_CLIENT_ID', c.clientId], ['GRAPH_CLIENT_SECRET', c.secret], ['GRAPH_TENANT_ID', c.tenant]].filter(([, v]) => !v).map(([k]) => k);
 }
-function owners() { return (process.env.OWNER_EMAILS || '').split(/[,;\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean); }
 
 const b64url = buf => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const fromB64url = s => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
@@ -99,11 +98,10 @@ async function finishLogin(origin, query, cookieHeader) {
   if (!claims.exp || claims.exp < now - 60) throw Object.assign(new Error('Sign-in token has expired. Please try again.'), { status: 401 });
   if (/^[0-9a-f-]{36}$/i.test(tenant) && claims.tid !== tenant) throw Object.assign(new Error('Please sign in with your Coastfields work account.'), { status: 403 });
   const email = String(claims.preferred_username || claims.email || claims.upn || '').toLowerCase();
-  const list = owners();
   if (!email) throw Object.assign(new Error('Microsoft did not share an email address for this account.'), { status: 403 });
-  if (list.length && !list.includes(email)) throw Object.assign(new Error(`${email} does not have access to the Coastfields Customer Portal.`), { status: 403, email });
   const session = { email, name: claims.name || email, iat: Date.now(), exp: Date.now() + SESSION_DAYS * 864e5 };
   return {
+    email, name: claims.name || email,
     location: p.returnTo || '/',
     setCookies: [cookie(SESSION_COOKIE, seal(session), { maxAge: SESSION_DAYS * 86400, secure: isHttps(origin) }),
       cookie(LOGIN_COOKIE, '', { maxAge: 0, path: '/auth', secure: isHttps(origin) })]
@@ -114,8 +112,6 @@ async function finishLogin(origin, query, cookieHeader) {
 function currentUser(cookieHeader, origin) {
   const s = unseal(parseCookies(cookieHeader)[SESSION_COOKIE]);
   if (!s || !s.email || s.exp < Date.now()) return { status: 401, error: 'Please sign in.' };
-  const list = owners();
-  if (list.length && !list.includes(s.email)) return { status: 403, error: `${s.email} does not have access to the Coastfields Customer Portal.`, noAccess: true };
   let renew = null;
   if (Date.now() - s.iat > 864e5) {
     const next = { ...s, iat: Date.now(), exp: Date.now() + SESSION_DAYS * 864e5 };

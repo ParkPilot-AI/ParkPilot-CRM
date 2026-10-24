@@ -1,5 +1,5 @@
-import { get, post, del, esc, state, icon, fmtDate, fmtAgo, fmtWhen, fmtDay, fmtTime, fullName, initials, money, toast, changed, telHref, typeClass, nowLocal } from '../core.js';
-import { taskDialog, bookDialog, callDialog, contactDialog, dealDialog, moveStage, valuationDialog, homeDialog, apptDialog } from '../dialogs.js';
+import { get, post, del, esc, state, icon, fmtDate, fmtAgo, fmtWhen, fmtDay, fmtTime, fullName, initials, money, toast, changed, telHref, typeClass, nowLocal, isMgr, isGroupMgr, me } from '../core.js';
+import { taskDialog, bookDialog, callDialog, contactDialog, dealDialog, moveStage, valuationDialog, homeDialog, apptDialog, allocateDialog } from '../dialogs.js';
 import { taskRow, bindTasks } from './parts.js';
 
 export let currentContact = null;
@@ -32,6 +32,7 @@ export async function render(el, { params }) {
           <span class="consent" title="Marketing consent"><span class="${c.consent_email ? 'on' : ''}">Email</span><span class="${c.consent_sms ? 'on' : ''}">SMS</span><span class="${c.consent_post ? 'on' : ''}">Post</span></span>
         </div>
         <div class="line"><span>${c.lead_source ? `Source ${esc(c.lead_source)}` : 'Source unknown'}</span><span>Enquired ${esc(c.enquiry_date ? fmtDate(c.enquiry_date) : 'unknown')}</span><span>Last contact ${esc(fmtAgo(lastTouch))}</span>${c.lead_no ? `<span class="faint">${esc(c.lead_no)}</span>` : ''}</div>
+        ${isMgr() ? `<div class="line owner-line">${c.owner_id ? `<span>Allocated to <b>${esc(c.owner_id === me().id ? 'you' : c.owner_name || 'someone')}</b></span>` : '<span class="badge amber">Not yet allocated</span>'}${isGroupMgr() && c.park_name ? `<span>${esc(c.park_name)}</span>` : ''}<button type="button" class="linkbtn" data-a="allocate">${c.owner_id ? 'Reallocate' : 'Allocate'}</button></div>` : ''}
       </div>
       <div class="actionbar">
         <button class="btn" data-a="note">${icon('note')} Note</button>
@@ -103,7 +104,8 @@ export async function render(el, { params }) {
     call: () => callDialog(c),
     edit: () => contactDialog(c),
     newdeal: () => dealDialog({ contact: c }),
-    addhome: () => homeDialog(null, { ownerId: c.id, ownerName: fullName(c) })
+    addhome: () => homeDialog(null, { ownerId: c.id, ownerName: fullName(c) }),
+    allocate: () => allocateDialog([c.id], { current: c.owner_id, label: fullName(c) })
   };
   el.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => act[b.dataset.a]()));
   const noteEl = el.querySelector('#quick-note');

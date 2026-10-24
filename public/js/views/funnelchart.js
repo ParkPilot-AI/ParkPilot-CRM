@@ -39,12 +39,18 @@ export function funnelHtml(f) {
 }
 
 // Renders the funnel panel body into `holder` with a period switch; remembers the chosen period.
-export function mountFunnel(holder, data) {
+// `extra` is added to the request when the period changes (e.g. 'mine=1' or 'owner=5').
+export function mountFunnel(holder, data, extra = '', { periodSwitch = true } = {}) {
   const draw = f => {
     holder.innerHTML = `<div class="f-head"><span class="muted small">${f.total ? `${f.total.toLocaleString('en-GB')} ${f.total === 1 ? 'enquiry' : 'enquiries'} ${periodLabel(f.period)}` : `No enquiries ${periodLabel(f.period)}`}</span>
-      <div class="seg" role="group" aria-label="Period">${PERIODS.map(([v, l]) => `<button type="button" data-period="${v}" class="${f.period === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+      ${!periodSwitch ? '' : `<div class="seg" role="group" aria-label="Period">${PERIODS.map(([v, l]) => `<button type="button" data-period="${v}" class="${f.period === v ? 'on' : ''}">${l}</button>`).join('')}</div>`}</div>
       ${f.total ? funnelHtml(f) : '<div class="empty small">The funnel fills in as enquiries come in.</div>'}`;
-    holder.querySelectorAll('[data-period]').forEach(b => b.addEventListener('click', async () => draw(await get(`/api/funnel?period=${b.dataset.period}&remember=1`))));
+    holder.querySelectorAll('[data-period]').forEach(b => b.addEventListener('click', async () => draw(await get(`/api/funnel?period=${b.dataset.period}&remember=1${extra ? '&' + extra : ''}`))));
   };
   draw(data);
+  // Narrow holders can't fit stage names inside the bands.
+  holder.classList.add('funnel-holder');
+  const fit = () => holder.classList.toggle('compact', holder.clientWidth < 720);
+  fit();
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(holder);
 }

@@ -1,5 +1,5 @@
 import { state, api, get, post, patch, del, esc, modal, formData, contactPicker, options, toast, changed, fmtWhen, fmtDate, fmtDay, fmtTime,
-  today, addDays, nowLocal, fullName, money, icon, confirmBox, minutes, hhmm } from './core.js';
+  today, addDays, nowLocal, fullName, money, icon, confirmBox, minutes, hhmm, me, isMgr, isGroupMgr, teamOptions, parkOptions, personName, plural } from './core.js';
 
 const M = () => state.meta;
 
@@ -19,6 +19,7 @@ export function taskDialog({ task = null, contact = null, dealId = null, due } =
         <label class="field">Time (optional)<input type="time" name="due_time" value="${esc(t.due_time || '')}"></label>
       </div>
       <div class="field"><span>Contact (optional)</span><div data-picker></div></div>
+      ${isMgr() ? `<label class="field">Whose list<select name="owner_id">${teamOptions(t.owner_id || contact?.owner_id || me().id)}</select></label>` : ''}
       <label class="field">Notes<textarea name="notes" rows="2">${esc(t.notes || '')}</textarea></label>`,
     foot: `${task ? `<button type="button" class="btn danger" data-drop>Delete</button><div class="spacer"></div>` : ''}<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${task ? 'Save task' : 'Add task'}</button>`,
     onMount(root, close, form) {
@@ -29,9 +30,11 @@ export function taskDialog({ task = null, contact = null, dealId = null, due } =
         const d = formData(form);
         if (!d.title) { form.title.focus(); return; }
         d.contact_id = d.contact_id ? Number(d.contact_id) : null;
+        if (d.owner_id) d.owner_id = Number(d.owner_id); else delete d.owner_id;
         if (dealId && !task) d.deal_id = dealId;
         if (task) await patch(`/api/tasks/${task.id}`, d); else await post('/api/tasks', d);
-        close(); toast(task ? 'Task saved' : `Task added for ${fmtDay(d.due_date).toLowerCase() === 'today' ? 'today' : fmtDay(d.due_date)}`); changed();
+        const forWho = d.owner_id && d.owner_id !== me().id ? ` on ${personName(d.owner_id)}’s list` : '';
+        close(); toast(task ? 'Task saved' : `Task added for ${fmtDay(d.due_date).toLowerCase() === 'today' ? 'today' : fmtDay(d.due_date)}${forWho}`); changed();
       });
       root.querySelector('[data-drop]')?.addEventListener('click', async () => {
         if (await confirmBox('Delete task?', `“${esc(t.title)}” will be removed from your list.`, { ok: 'Delete task', danger: true })) {
@@ -55,7 +58,7 @@ function bindChips(root, form) {
 
 /* ------------------------------------------------------------- booking */
 
-export function bookDialog({ contact = null, dealId = null, start = null, type = 'Park tour', title = '', notes = '', appt = null } = {}) {
+export function bookDialog({ contact = null, dealId = null, start = null, type = 'Park tour', title = '', notes = '', appt = null, ownerId = null } = {}) {
   const m = M();
   const s = m.settings;
   const editing = !!appt;
@@ -69,6 +72,7 @@ export function bookDialog({ contact = null, dealId = null, start = null, type =
     wide: true,
     body: `
       <div class="field"><span>Customer</span><div data-picker></div></div>
+      ${isMgr() && !editing ? `<label class="field">In whose diary<select name="owner_id" data-owner>${teamOptions(ownerId || currentContact?.owner_id || me().id)}</select></label>` : ''}
       <div class="field"><span>Type</span><div class="chips" data-chips="type">${m.apptTypes.map(c => `<button type="button" class="chip${t0 === c ? ' on' : ''}" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div><input type="hidden" name="type" value="${esc(t0)}"></div>
       <div class="field"><span>When</span>
         <div data-slots class="${custom ? 'hidden' : ''}"><div class="slots"><div class="faint small">Finding free times…</div></div>
@@ -99,19 +103,27 @@ export function bookDialog({ contact = null, dealId = null, start = null, type =
         if (!editing && form.send_invite && form.send_invite.checked) {
           if (!currentContact) out.push('Choose a customer to send an invite.');
           else if (!currentContact.email) out.push('No email address on file, so no invite will be sent.');
+          else if (form.owner_id && Number(form.owner_id.value) !== me().id) out.push(`The invite is sent from ${personName(form.owner_id.value)}’s Outlook if they have connected it.`);
           else if (!m.outlook.connected) out.push('Connect Outlook in Settings to send invites; it will be saved in the diary meanwhile.');
         }
         inviteNote.textContent = out.join(' ');
       };
       contactPicker(root.querySelector('[data-picker]'), {
         value: currentContact?.id, label: currentContact ? fullName(currentContact) : '',
-        onPick: async c => { currentContact = c ? (c.email !== undefined ? c : (await get('/api/contacts/' + c.id)).contact) : null; updateInviteNote(); }
+        onPick: async c => {
+          currentContact = c ? (c.email !== undefined && c.owner_id !== undefined ? c : (await get('/api/contacts/' + c.id)).contact) : null;
+          // Book into the lead's owner's diary unless a diary was chosen by hand.
+          const sel = form.owner_id;
+          if (sel && !sel.dataset.touched && currentContact && currentContact.owner_id && [...sel.options].some(o => o.value === String(currentContact.owner_id))) { sel.value = String(currentContact.owner_id); loadSlots(); }
+          updateInviteNote();
+        }
       });
+      form.owner_id?.addEventListener('change', () => { form.owner_id.dataset.touched = '1'; loadSlots(); updateInviteNote(); });
       const loadSlots = async () => {
         if (custom) return;
         const ty = form.type.value;
         slotsBox.innerHTML = '<div class="faint small">Finding free times…</div>';
-        const r = await get(`/api/slots?type=${encodeURIComponent(ty)}${appt ? '&exclude=' + appt.id : ''}`);
+        const r = await get(`/api/slots?type=${encodeURIComponent(ty)}${appt ? '&exclude=' + appt.id : ''}${form.owner_id ? '&owner=' + form.owner_id.value : ''}`);
         if (!r.slots.length) { slotsBox.innerHTML = '<div class="faint small">No free time in the next two weeks within opening hours. Choose another time.</div>'; return; }
         chosen = r.slots[0];
         slotsBox.innerHTML = r.slots.map((sl, i) => `<button type="button" class="slot${i === 0 ? ' on' : ''}" data-i="${i}"><b>${esc(fmtDay(sl.start))}</b><span>${esc(fmtTime(sl.start))} – ${esc(fmtTime(sl.end))}</span></button>`).join('');
@@ -147,10 +159,12 @@ export function bookDialog({ contact = null, dealId = null, start = null, type =
           close(); toast(`${d.type} saved for ${fmtWhen(startDt)}`); changed(); return;
         }
         payload.send_invite = d.send_invite; payload.deal_id = dealId;
+        if (d.owner_id) payload.owner_id = Number(d.owner_id);
         const a = await post('/api/appointments', payload);
         close();
-        const invited = d.send_invite && currentContact && currentContact.email && m.outlook.connected;
-        toast(`${a.type} booked for ${fmtWhen(a.start)}${invited ? '. Invite on its way.' : ''}`);
+        const mine = !payload.owner_id || payload.owner_id === me().id;
+        const invited = d.send_invite && currentContact && currentContact.email && mine && m.outlook.connected;
+        toast(`${a.type} booked for ${fmtWhen(a.start)}${mine ? '' : ` in ${personName(payload.owner_id)}’s diary`}${invited ? '. Invite on its way.' : ''}`);
         changed();
       });
     }
@@ -387,6 +401,10 @@ export function contactDialog(c = null, { onSaved, prefill } = {}) {
         <label class="check"><input type="checkbox" name="consent_sms" ${v.consent_sms ? 'checked' : ''}> Text message</label>
         <label class="check"><input type="checkbox" name="consent_post" ${v.consent_post ? 'checked' : ''}> Post</label>
       </div></div>
+      ${!c && isMgr() ? `<div class="grid2">
+        <label class="field">Allocate to<select name="owner_id">${teamOptions(prefill && prefill.owner_id !== undefined ? prefill.owner_id : me().id, { unallocated: true, unallocatedLabel: 'Nobody yet (unallocated)' })}</select></label>
+        ${isGroupMgr() && (M().parks || []).length > 1 ? `<label class="field">Park<select name="park_id">${parkOptions(me().park_id || M().parks[0].id)}</select><span class="faint small" style="font-weight:400">Used when unallocated; otherwise the person’s park.</span></label>` : ''}
+      </div>` : ''}
       <datalist id="sources-list"></datalist>`,
     foot: `${c ? '<button type="button" class="btn danger" data-delete>Delete contact</button><div class="spacer"></div>' : ''}<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${c ? 'Save contact' : 'Add contact'}</button>`,
     async onMount(root, close, form) {
@@ -394,6 +412,7 @@ export function contactDialog(c = null, { onSaved, prefill } = {}) {
         e.preventDefault();
         const d = formData(form);
         d.finance_needed = Number(d.finance_needed);
+        if ('owner_id' in d) d.owner_id = d.owner_id ? Number(d.owner_id) : null;
         if (!(d.first_name || d.last_name)) { toast('Enter a name', { error: true }); form.first_name.focus(); return; }
         const saved = c ? await patch(`/api/contacts/${c.id}`, d) : await post('/api/contacts', d);
         close(); toast(c ? 'Contact saved' : `${fullName(saved)} added`); changed();
@@ -571,3 +590,32 @@ export function plotDialog(plot = null) {
 }
 
 export { minutes, hhmm };
+
+/* ------------------------------------------------------------ allocate */
+
+// Hands one or more leads to a team member, or back to the unallocated list. Managers only.
+export function allocateDialog(ids, { current = undefined, label = '', onDone } = {}) {
+  const n = ids.length;
+  const parks = M().parks || [];
+  modal({
+    title: n === 1 ? `Allocate ${label || 'this lead'}` : `Allocate ${plural(n, 'lead')}`,
+    body: `
+      <label class="field">Give ${n === 1 ? 'it' : 'them'} to<select name="owner_id" autofocus>${teamOptions(current === undefined ? '' : current, { unallocated: true, unallocatedLabel: 'Nobody (back to unallocated)' })}</select></label>
+      ${isGroupMgr() && parks.length > 1 ? `<label class="field" data-parkrow>Park (when unallocated)<select name="park_id">${parkOptions('', { blank: 'Keep their current park' })}</select></label>` : ''}
+      <p class="faint small" style="margin:0">Their open tasks move with them. Appointments already booked stay in the diary they were booked into.</p>`,
+    foot: `<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Allocate</button>`,
+    onMount(root, close, form) {
+      const row = root.querySelector('[data-parkrow]');
+      const sync = () => row && row.classList.toggle('hidden', !!form.owner_id.value);
+      form.owner_id.addEventListener('change', sync); sync();
+      form.addEventListener('submit', async e => {
+        e.preventDefault();
+        const owner = form.owner_id.value ? Number(form.owner_id.value) : null;
+        const r = await post('/api/contacts/assign', { ids, owner_id: owner, park_id: form.park_id && !owner ? Number(form.park_id.value) || null : null });
+        close();
+        toast(owner ? `${plural(r.moved, 'lead')} allocated to ${personName(owner)}` : `${plural(r.moved, 'lead')} returned to unallocated`);
+        onDone ? onDone(r) : changed();
+      });
+    }
+  });
+}

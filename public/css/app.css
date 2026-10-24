@@ -580,3 +580,88 @@ body { overflow-x: clip; }
   .f-head .seg { width: 100%; }
   .f-head .seg button { flex: 1; }
 }
+
+/* ---------------------------------------------------- roles, team and Captain's Log */
+.mgr-only { display: none !important; }
+body.is-mgr .nav a.mgr-only { display: flex !important; }
+.settings-grid .span2 { grid-column: 1 / -1; }
+
+.log-mark { width: 44px; height: 44px; border-radius: 12px; background: var(--sea-tint); color: var(--sea-dark); display: grid; place-items: center; flex: none; }
+.log-mark svg { width: 24px; height: 24px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr)); gap: 12px; margin-bottom: 20px; }
+.kpi { background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 2px; min-width: 0; color: var(--ink); }
+a.kpi:hover { text-decoration: none; border-color: var(--line); background: var(--surface-2); }
+.kpi.amber { border-color: #f1d9a2; }
+.kpi.red { border-color: #f0c4be; }
+.k-label { font-size: 13px; font-weight: 600; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+.k-flag { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; }
+.k-flag svg { width: 12px; height: 12px; }
+.k-flag.amber { background: var(--amber-tint); color: #8a5800; }
+.k-flag.red { background: var(--red-tint); color: var(--red); }
+.k-value { font-size: 28px; font-weight: 800; letter-spacing: -0.01em; line-height: 1.15; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.k-sub { font-size: 12.5px; color: var(--ink-3); }
+.log-top { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+.team-table th.num, .team-table td.num, .src-table th.num, .src-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.team-table td { vertical-align: top; }
+.m-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--ink-2); margin: 4px 0 2px; }
+.m-stats b { color: var(--ink); }
+.team-cards { display: none; }
+
+.pool-callout { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; background: var(--amber-tint); border-color: #f1d9a2; }
+.pool-callout span { flex: 1 1 220px; }
+.owner-line .linkbtn { font-size: 13.5px; }
+.diary-for { margin-bottom: 4px; }
+.diary-for select, .funnel-filters select { margin-left: 6px; }
+.funnel-filters { gap: 14px; flex-wrap: wrap; }
+.card .meta.owner { color: var(--ink-2); font-weight: 600; }
+
+.owner-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; }
+.owner-chips select { font: inherit; font-size: 14px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface); color: var(--ink-2); max-width: 100%; }
+.owner-chips select.on { border-color: var(--sea); color: var(--ink); background: var(--sea-tint); }
+.select-bar { position: sticky; top: 64px; z-index: 5; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: var(--ink); color: #fff; border-radius: var(--radius); padding: 8px 10px 8px 14px; margin-bottom: 12px; box-shadow: 0 6px 18px rgba(21, 49, 75, .18); }
+.select-bar .btn { background: rgba(255, 255, 255, .12); color: #fff; border-color: transparent; }
+.select-bar .btn.primary { background: var(--sun); color: var(--ink); }
+.select-bar .btn:disabled { opacity: .5; }
+.pick-col { width: 36px; }
+input.pick { width: 18px; height: 18px; accent-color: var(--sea); }
+.m-pick { display: flex; align-items: center; padding: 0 0 0 12px; }
+
+.people { list-style: none; margin: 0; padding: 0; }
+.person { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+.person:last-child { border-bottom: 0; }
+.person .who { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.person .acts { flex: none; white-space: nowrap; }
+.person.gone .who b { color: var(--ink-3); }
+
+@media (max-width: 980px) { .log-top { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  body.is-mgr .nav a[data-nav=funnel] { display: none; }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .kpi { padding: 12px; }
+  .k-value { font-size: 22px; }
+  .team-cards { display: block; }
+  .log-head .seg { flex: 1 1 100%; }
+  .log-head .seg button { flex: 1; }
+  .log-head label { flex: 1 1 100%; }
+  .log-head label select { width: 100%; margin-top: 4px; }
+  .select-bar { top: auto; bottom: calc(76px + env(safe-area-inset-bottom)); position: sticky; }
+  .person { flex-wrap: wrap; }
+  .person .acts { width: 100%; }
+  .owner-chips select { flex: 1 1 100%; }
+  .diary-for label, .funnel-filters label { flex: 1 1 100%; }
+  .diary-for select, .funnel-filters select { width: 100%; margin: 4px 0 0; }
+}
+
+/* Funnel in a narrow panel (e.g. beside the allocation list): stage names move to the side column. */
+.funnel-holder.compact .f-band .f-name { display: none; }
+.funnel-holder.compact .f-side .f-mname { display: block; color: var(--ink); font-weight: 700; font-size: 13.5px; }
+@media (max-width: 760px) {
+  .nav a, .nav .more-btn { flex: 1 1 0; min-width: 0; }
+  .nav a .lbl { text-align: center; line-height: 1.15; overflow-wrap: anywhere; }
+  .src-table th, .src-table td { padding-left: 6px; padding-right: 6px; font-size: 13px; }
+  .src-table th:first-child, .src-table td:first-child { padding-left: 12px; }
+}
+@media (max-width: 760px) {
+  .log-head .seg { min-width: 0; }
+  .log-head .seg button { min-width: 0; padding-left: 4px; padding-right: 4px; font-size: 13.5px; white-space: nowrap; }
+}

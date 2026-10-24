@@ -78,6 +78,27 @@ function migrate() {
       }
     } catch { /* leave a malformed setting alone */ }
   }
+  const add = (t, c, def) => { if (!cols(t).includes(c)) current.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${def}`); };
+  // October 2026: several parks and a sales team. Leads belong to a park and (once allocated) to a person.
+  add('contacts', 'park_id', 'INTEGER'); add('contacts', 'owner_id', 'INTEGER'); add('contacts', 'assigned_at', 'TEXT');
+  add('tasks', 'owner_id', 'INTEGER'); add('tasks', 'todo_user_id', 'INTEGER');
+  add('appointments', 'owner_id', 'INTEGER'); add('outlook_events', 'user_id', 'INTEGER');
+  add('homes', 'park_id', 'INTEGER'); add('plots', 'park_id', 'INTEGER');
+  add('deals', 'reserved_at', 'TEXT'); add('deals', 'completed_at', 'TEXT');
+  current.exec(`CREATE INDEX IF NOT EXISTS ix_contacts_owner ON contacts(owner_id);
+    CREATE INDEX IF NOT EXISTS ix_contacts_park ON contacts(park_id, owner_id);
+    CREATE INDEX IF NOT EXISTS ix_tasks_owner ON tasks(owner_id, status, due_date);
+    CREATE INDEX IF NOT EXISTS ix_appts_owner ON appointments(owner_id, start);
+    CREATE INDEX IF NOT EXISTS ix_oe_user ON outlook_events(user_id, start);`);
+  if (!current.exec('SELECT 1 FROM parks LIMIT 1').length) {
+    const t = nowStamp();
+    const st = current.prepare('INSERT INTO parks(name, created_at, updated_at) VALUES(?, ?, ?)'); st.run(['Coastfields', t, t]); st.free();
+  }
+  for (const t of ['contacts', 'homes', 'plots']) current.exec(`UPDATE ${t} SET park_id = (SELECT MIN(id) FROM parks) WHERE park_id IS NULL`);
+  // When a deal was first reserved (deposit or payment) and completed, for the Captain's Log.
+  current.exec(`UPDATE deals SET reserved_at = COALESCE(stage_changed_at, updated_at) WHERE reserved_at IS NULL
+                AND furthest_stage IN ('Finance & Paperwork','Siting & Handover','Completed')`);
+  current.exec("UPDATE deals SET completed_at = COALESCE(stage_changed_at, updated_at) WHERE completed_at IS NULL AND stage = 'Completed'");
 }
 
 function exportBytes() { return current.export(); }
@@ -185,6 +206,13 @@ CREATE TABLE IF NOT EXISTS outlook_events (
   updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_oe_start ON outlook_events(start);
+
+CREATE TABLE IF NOT EXISTS parks (id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT, role TEXT NOT NULL DEFAULT 'exec',
+  park_id INTEGER, active INTEGER NOT NULL DEFAULT 1, funnel_period TEXT, last_seen_at TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sync_state (key TEXT PRIMARY KEY, value TEXT);

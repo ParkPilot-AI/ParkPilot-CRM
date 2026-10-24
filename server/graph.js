@@ -7,6 +7,10 @@
 //    portal then reads the changes with a calendarView delta query. A delta check also runs
 //    whenever the portal is open and the last one is more than a few minutes old.
 //  - Tasks are mirrored to a "Coastfields CRM" list in Microsoft To Do; completions flow back.
+//
+// Each member of the team connects their own Outlook. Everything here acts for one person at a time:
+// `as(userId, fn)` sets who, and their tokens and sync state are kept under keys ending ":<userId>".
+// Appointments go to their owner's calendar and tasks to their owner's To Do.
 const crypto = require('node:crypto');
 const { db, tx, insert, update, get, getSettings, getState, setState, logJob } = require('./db');
 const U = require('./util');
@@ -20,8 +24,13 @@ const TZ_HEADERS = { Prefer: 'outlook.timezone="Europe/London", IdType="Immutabl
 
 const cancelMessages = new Map();
 let busy = false;
-const pending = { push: false, todo: false };
 let origin = '';
+let gu = null; // the person whose Outlook we are working with
+
+async function as(uid, fn) { const prev = gu; gu = uid ? Number(uid) : null; try { return await fn(); } finally { gu = prev; } }
+function cur() { return currentUserId(); }
+const K = name => `${name}:${cur()}`;
+function currentUserId() { return gu || (require('./access').ctx.user || {}).id || null; }
 
 function config() {
   return {
@@ -40,7 +49,8 @@ function setOrigin(o) {
 function siteOrigin() { return origin || getSettings().publicOrigin || ''; }
 function redirectUri() { return `${siteOrigin()}/api/auth/callback`; }
 function notifyUrl() { return `${siteOrigin()}/api/graph/notify`; }
-function clientState() { return crypto.createHmac('sha256', config().secret || 'coastfields').update('graph-notify').digest('hex').slice(0, 64); }
+function clientStateFor(uid) { return `${uid}.` + crypto.createHmac('sha256', config().secret || 'coastfields').update('graph-notify:' + uid).digest('hex').slice(0, 64); }
+function clientState() { return clientStateFor(cur()); }
 
 // Refresh tokens are stored encrypted with a key derived from the client secret.
 function key() { return crypto.createHash('sha256').update('coastfields-token:' + (config().secret || 'local')).digest(); }
@@ -59,14 +69,24 @@ function unseal(box) {
   } catch { return null; }
 }
 function tokens() {
-  const t = getState('msTokens');
+  const t = getState(K('msTokens'));
   if (!t) return null;
   return { ...t, refresh_token: unseal(t.refresh_box), access_token: unseal(t.access_box) };
 }
-function isConnected() { const t = getState('msTokens'); return !!(t && t.refresh_box && configured()); }
+// Is this person's Outlook connected? (Defaults to whoever we are working for.)
+function isConnected(uid) {
+  const id = uid === undefined ? (cur() || currentUserId()) : uid;
+  if (!id) return false;
+  const t = getState(`msTokens:${id}`);
+  return !!(t && t.refresh_box && configured());
+}
+function connectedUsers() {
+  return db.prepare("SELECT key FROM sync_state WHERE key LIKE 'msTokens:%'").all().map(r => Number(r.key.split(':')[1]))
+    .filter(id => isConnected(id) && (get('users', id) || {}).active);
+}
 
-function graphStatus() { return getState('graphStatus') || {}; }
-function setGraphStatus(patch) { setState('graphStatus', { ...graphStatus(), ...patch }); }
+function graphStatus() { return getState(K('graphStatus')) || {}; }
+function setGraphStatus(patch) { setState(K('graphStatus'), { ...graphStatus(), ...patch }); }
 
 /* ------------------------------------------------------------------ auth */
 
@@ -78,7 +98,7 @@ function startAuth() {
   const verifier = b64url(crypto.randomBytes(48));
   const challenge = b64url(crypto.createHash('sha256').update(verifier).digest());
   const state = b64url(crypto.randomBytes(16));
-  setState('authPending', { state, verifier, created: Date.now(), redirect: redirectUri() });
+  setState(K('authPending'), { state, verifier, created: Date.now(), redirect: redirectUri() });
   const q = new URLSearchParams({
     client_id: clientId, response_type: 'code', redirect_uri: redirectUri(), response_mode: 'query',
     scope: SCOPES, state, code_challenge: challenge, code_challenge_method: 'S256', prompt: 'select_account'
@@ -98,8 +118,8 @@ async function tokenRequest(params) {
 }
 
 function saveTokens(j, account) {
-  const prev = getState('msTokens') || {};
-  setState('msTokens', {
+  const prev = getState(K('msTokens')) || {};
+  setState(K('msTokens'), {
     access_box: seal(j.access_token), refresh_box: j.refresh_token ? seal(j.refresh_token) : prev.refresh_box,
     expires_at: Date.now() + (Number(j.expires_in) || 3600) * 1000, account: account || prev.account || null
   });
@@ -107,28 +127,27 @@ function saveTokens(j, account) {
 
 async function finishAuth(query) {
   if (query.error) throw new Error(query.error_description || query.error);
-  const p = getState('authPending');
+  const p = getState(K('authPending'));
   if (!p || p.state !== query.state || Date.now() - p.created > 20 * 60e3) throw new Error('This sign-in link has expired. Please try connecting again.');
-  setState('authPending', null);
+  setState(K('authPending'), null);
   const j = await tokenRequest({ grant_type: 'authorization_code', code: query.code, redirect_uri: p.redirect, code_verifier: p.verifier });
   saveTokens(j, null);
   const me = await graphFetch('GET', '/me?$select=displayName,mail,userPrincipalName');
   saveTokens(j, { name: me.displayName, email: me.mail || me.userPrincipalName });
   logJob('outlook', `Connected as ${me.mail || me.userPrincipalName}`);
-  // Everything created before connecting gets pushed now.
-  db.prepare("UPDATE appointments SET sync_status = 'Pending', sync_attempts = 0 WHERE status = 'Scheduled' AND outlook_event_id IS NULL AND start >= ?").run(U.addDays(U.today(), -1) + 'T00:00');
-  pending.push = true; pending.todo = true;
+  // Everything of theirs created before connecting gets pushed now.
+  db.prepare("UPDATE appointments SET sync_status = 'Pending', sync_attempts = 0 WHERE owner_id = ? AND status = 'Scheduled' AND outlook_event_id IS NULL AND start >= ?").run(cur(), U.addDays(U.today(), -1) + 'T00:00');
   await syncNow({ budgetMs: 5e3 });
 }
 
 async function disconnect() {
-  const sub = getState('subscription');
-  if (sub && sub.id && isConnected()) await graphFetch('DELETE', `/subscriptions/${sub.id}`).catch(() => {});
-  for (const k of ['msTokens', 'calDelta', 'todoList', 'todoDelta', 'subscription', 'graphStatus']) setState(k, null);
-  db.prepare("UPDATE appointments SET sync_status = 'Local' WHERE sync_status IN ('Pending','Error')").run();
-  db.prepare('DELETE FROM outlook_events').run();
-  db.prepare('UPDATE tasks SET todo_id = NULL, todo_hash = NULL').run();
-  logJob('outlook', 'Disconnected');
+  const sub = getState(K('subscription'));
+  if (sub && sub.id && isConnected(cur())) await graphFetch('DELETE', `/subscriptions/${sub.id}`).catch(() => {});
+  for (const k of ['msTokens', 'calDelta', 'todoList', 'todoDelta', 'subscription', 'graphStatus']) setState(K(k), null);
+  db.prepare("UPDATE appointments SET sync_status = 'Local' WHERE owner_id = ? AND sync_status IN ('Pending','Error')").run(cur());
+  db.prepare('DELETE FROM outlook_events WHERE user_id = ?').run(cur());
+  db.prepare('UPDATE tasks SET todo_id = NULL, todo_hash = NULL, todo_user_id = NULL WHERE todo_user_id = ?').run(cur());
+  logJob('outlook', `Disconnected (user ${cur()})`);
 }
 
 async function accessToken() {
@@ -156,7 +175,7 @@ async function graphFetch(method, path, body, extraHeaders = {}, attempt = 0) {
     }
   }
   if (res.status === 401 && attempt === 0) {
-    const t = getState('msTokens'); if (t) setState('msTokens', { ...t, expires_at: 0 });
+    const t = getState(K('msTokens')); if (t) setState(K('msTokens'), { ...t, expires_at: 0 });
     return graphFetch(method, path, body, extraHeaders, 1);
   }
   if (res.status === 204 || res.status === 202) return {};
@@ -174,11 +193,11 @@ async function graphFetch(method, path, body, extraHeaders = {}, attempt = 0) {
 
 // Changes are marked here and sent by flush(), which the request handler awaits before saving.
 function queuePush(apptId) {
-  if (!isConnected()) return;
-  if (apptId) db.prepare("UPDATE appointments SET sync_status = 'Pending', sync_attempts = 0 WHERE id = ? AND sync_status <> 'Pending'").run(apptId);
-  pending.push = true;
+  const a = apptId && get('appointments', apptId);
+  if (!a || !isConnected(a.owner_id)) return;
+  db.prepare("UPDATE appointments SET sync_status = 'Pending', sync_attempts = 0 WHERE id = ? AND sync_status <> 'Pending'").run(apptId);
 }
-function queueCancel(apptId, message) { if (message) cancelMessages.set(apptId, message); queuePush(null); }
+function queueCancel(apptId, message) { if (message) cancelMessages.set(apptId, message); }
 
 function htmlEscape(s) { return String(s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
@@ -251,10 +270,10 @@ async function pushOne(a) {
 }
 
 async function processPushQueue() {
-  if (!isConnected() || busy) return;
+  if (!isConnected(cur()) || busy) return;
   busy = true;
   try {
-    const rows = db.prepare("SELECT * FROM appointments WHERE sync_status = 'Pending' ORDER BY updated_at LIMIT 25").all();
+    const rows = db.prepare("SELECT * FROM appointments WHERE owner_id = ? AND sync_status = 'Pending' ORDER BY updated_at LIMIT 25").all(cur());
     for (const a of rows) {
       try { await pushOne(a); setGraphStatus({ lastPush: U.nowStamp() }); }
       catch (e) {
@@ -272,14 +291,14 @@ async function processPushQueue() {
 const localDT = s => (s || '').slice(0, 16);
 
 function cacheEvent(ev, apptId) {
-  db.prepare(`INSERT INTO outlook_events(id, subject, start, end, is_all_day, show_as, is_cancelled, change_key, ical_uid, appointment_id, attendees, updated_at)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+  db.prepare(`INSERT INTO outlook_events(id, subject, start, end, is_all_day, show_as, is_cancelled, change_key, ical_uid, appointment_id, attendees, updated_at, user_id)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT(id) DO UPDATE SET subject=excluded.subject, start=excluded.start, end=excluded.end, is_all_day=excluded.is_all_day,
                 show_as=excluded.show_as, is_cancelled=excluded.is_cancelled, change_key=excluded.change_key, ical_uid=excluded.ical_uid,
-                appointment_id=COALESCE(excluded.appointment_id, outlook_events.appointment_id), attendees=excluded.attendees, updated_at=excluded.updated_at`)
+                appointment_id=COALESCE(excluded.appointment_id, outlook_events.appointment_id), attendees=excluded.attendees, updated_at=excluded.updated_at, user_id=excluded.user_id`)
     .run(ev.id, ev.subject || '', localDT(ev.start && ev.start.dateTime), localDT(ev.end && ev.end.dateTime), ev.isAllDay ? 1 : 0,
       ev.showAs || 'busy', ev.isCancelled ? 1 : 0, ev.changeKey || null, ev.iCalUId || null, apptId || null,
-      JSON.stringify((ev.attendees || []).map(x => x.emailAddress && x.emailAddress.address).filter(Boolean)), U.nowStamp());
+      JSON.stringify((ev.attendees || []).map(x => x.emailAddress && x.emailAddress.address).filter(Boolean)), U.nowStamp(), cur());
 }
 
 function guessType(ev) {
@@ -295,15 +314,15 @@ function guessType(ev) {
 function applyEvent(ev) {
   const L = require('./logic');
   if (ev['@removed']) {
-    const a = db.prepare('SELECT * FROM appointments WHERE outlook_event_id = ?').get(ev.id);
+    const a = db.prepare('SELECT * FROM appointments WHERE outlook_event_id = ? AND owner_id = ?').get(ev.id, cur());
     db.prepare('DELETE FROM outlook_events WHERE id = ?').run(ev.id);
     if (a && a.status === 'Scheduled' && a.sync_status !== 'Pending' && a.end >= U.nowLocal()) L.cancelAppointment(a.id, { fromOutlook: true });
     else if (a) update('appointments', a.id, { outlook_event_id: null, change_key: null }, { touch: false });
     return 'removed';
   }
   if (ev.type === 'seriesMaster') return 'skip';
-  let a = db.prepare('SELECT * FROM appointments WHERE outlook_event_id = ?').get(ev.id)
-       || (ev.iCalUId ? db.prepare('SELECT * FROM appointments WHERE ical_uid = ? AND ical_uid IS NOT NULL').get(ev.iCalUId) : null);
+  let a = db.prepare('SELECT * FROM appointments WHERE outlook_event_id = ? AND owner_id = ?').get(ev.id, cur())
+       || (ev.iCalUId ? db.prepare('SELECT * FROM appointments WHERE ical_uid = ? AND ical_uid IS NOT NULL AND owner_id = ?').get(ev.iCalUId, cur()) : null);
   cacheEvent(ev, a ? a.id : null);
   if (a) {
     if (a.change_key && a.change_key === ev.changeKey) return 'echo';
@@ -334,7 +353,12 @@ function applyEvent(ev) {
   if ((ev.categories || []).includes(CATEGORY) || ev.isCancelled || ev.isAllDay) return 'cached';
   const emails = (ev.attendees || []).map(x => (x.emailAddress && x.emailAddress.address || '').toLowerCase()).filter(Boolean);
   if (!emails.length) return 'cached';
-  const contact = db.prepare(`SELECT * FROM contacts WHERE lower(email) IN (${emails.map(() => '?').join(',')}) ORDER BY updated_at DESC LIMIT 1`).get(...emails);
+  // Only link to customers this person can see (their own leads, or their park's for a manager).
+  const A = require('./access');
+  const me = get('users', cur());
+  if (!me) return 'cached';
+  const scope = A.contactWhere(me, 'c');
+  const contact = db.prepare(`SELECT c.* FROM contacts c WHERE lower(c.email) IN (${emails.map(() => '?').join(',')}) AND ${scope.sql} ORDER BY c.updated_at DESC LIMIT 1`).get(...emails, ...scope.args);
   if (!contact) return 'cached';
   const start = localDT(ev.start.dateTime), end = localDT(ev.end.dateTime);
   if (start < U.addDays(U.today(), -7) + 'T00:00') return 'cached';
@@ -343,7 +367,7 @@ function applyEvent(ev) {
   const id = insert('appointments', {
     type, title: ev.subject || type, start, end, location: ev.location && ev.location.displayName, is_remote: ev.isOnlineMeeting ? 1 : 0,
     contact_id: contact.id, deal_id: deal ? deal.id : null, outlook_event_id: ev.id, ical_uid: ev.iCalUId, change_key: ev.changeKey,
-    teams_url: ev.onlineMeeting && ev.onlineMeeting.joinUrl, sync_status: 'Synced', needs_review: 1, send_invite: 0
+    teams_url: ev.onlineMeeting && ev.onlineMeeting.joinUrl, sync_status: 'Synced', needs_review: 1, send_invite: 0, owner_id: cur()
   });
   db.prepare('UPDATE outlook_events SET appointment_id = ? WHERE id = ?').run(id, ev.id);
   insert('interactions', { contact_id: contact.id, deal_id: deal ? deal.id : null, type: 'Appointment', at: U.nowLocal(), appointment_id: id,
@@ -354,7 +378,7 @@ function applyEvent(ev) {
 
 async function pullCalendar({ budgetMs = 20e3, forceFresh = false } = {}) {
   const deadline = Date.now() + budgetMs;
-  let st = getState('calDelta');
+  let st = getState(K('calDelta'));
   const fresh = forceFresh || !st || (!st.link && !st.next) || Date.now() - (st.createdAt || 0) > 7 * 864e5;
   let url;
   if (fresh) {
@@ -381,12 +405,12 @@ async function pullCalendar({ budgetMs = 20e3, forceFresh = false } = {}) {
     // A fresh window lists every event in it; anything cached in that window but not listed has gone.
     const from = U.addDays(U.today(), -30) + 'T00:00';
     const seen = new Set(st.seen);
-    db.prepare('DELETE FROM outlook_events WHERE start < ?').run(from);
-    const stale = db.prepare('SELECT id FROM outlook_events WHERE start >= ?').all(from).filter(r => !seen.has(r.id));
+    db.prepare('DELETE FROM outlook_events WHERE user_id = ? AND start < ?').run(cur(), from);
+    const stale = db.prepare('SELECT id FROM outlook_events WHERE user_id = ? AND start >= ?').all(cur(), from).filter(r => !seen.has(r.id));
     tx(() => { for (const r of stale) applyEvent({ id: r.id, '@removed': { reason: 'deleted' } }); });
     st.fresh = false; st.seen = [];
   }
-  setState('calDelta', st);
+  setState(K('calDelta'), st);
   setGraphStatus({ lastPull: U.nowStamp(), lastPullMs: Date.now() });
   counts.complete = finished;
   return counts;
@@ -394,18 +418,16 @@ async function pullCalendar({ budgetMs = 20e3, forceFresh = false } = {}) {
 
 /* ------------------------------------------------------- Microsoft To Do */
 
-function queueTodoSync() {
-  if (!isConnected() || !getSettings().todoMirror) return;
-  pending.todo = true;
-}
+// Nothing to do: flush() works out whose To Do needs updating by comparing each task with what was last sent.
+function queueTodoSync() {}
 
 async function todoListId() {
-  const saved = getState('todoList');
+  const saved = getState(K('todoList'));
   if (saved) return saved;
   const lists = await graphFetch('GET', '/me/todo/lists');
   let list = (lists.value || []).find(l => l.displayName === CATEGORY);
   if (!list) list = await graphFetch('POST', '/me/todo/lists', { displayName: CATEGORY });
-  setState('todoList', list.id);
+  setState(K('todoList'), list.id);
   return list.id;
 }
 
@@ -422,37 +444,48 @@ function todoPayload(t) {
 }
 const hashOf = o => crypto.createHash('sha1').update(JSON.stringify(o)).digest('hex');
 
+// This person's tasks that need sending to (or removing from) their To Do list.
+function todoRows() {
+  return db.prepare(`SELECT * FROM tasks WHERE (owner_id = ? AND status = 'Open') OR todo_user_id = ?`).all(cur(), cur());
+}
+function todoDirty() {
+  for (const t of todoRows()) {
+    if (t.todo_user_id === cur() && (t.owner_id !== cur() || t.status !== 'Open')) return true;
+    if (t.owner_id === cur() && t.status === 'Open' && (!t.todo_id || t.todo_hash !== hashOf(todoPayload(t)))) return true;
+  }
+  return false;
+}
+
 let todoBusy = false;
 async function syncTodo() {
-  if (!isConnected() || !getSettings().todoMirror || todoBusy) return;
+  if (!isConnected(cur()) || !getSettings().todoMirror || todoBusy) return;
   todoBusy = true;
   try {
     const listId = await todoListId();
     // Pull completions first so a tick in To Do isn't overwritten.
-    let dst = getState('todoDelta');
+    let dst = getState(K('todoDelta'));
     let url = dst && dst.link ? dst.link : `${GRAPH}/me/todo/lists/${listId}/tasks/delta`;
     for (let page = 0; page < 50 && url; page++) {
       let j;
       try { j = await graphFetch('GET', url); }
-      catch (e) { if (e.status === 410 || e.status === 400) { setState('todoDelta', null); url = `${GRAPH}/me/todo/lists/${listId}/tasks/delta`; continue; } throw e; }
+      catch (e) { if (e.status === 410 || e.status === 400) { setState(K('todoDelta'), null); url = `${GRAPH}/me/todo/lists/${listId}/tasks/delta`; continue; } throw e; }
       for (const item of j.value || []) {
-        const t = db.prepare('SELECT * FROM tasks WHERE todo_id = ?').get(item.id);
+        const t = db.prepare('SELECT * FROM tasks WHERE todo_id = ? AND todo_user_id = ?').get(item.id, cur());
         if (!t) continue;
-        if (item['@removed']) { update('tasks', t.id, { todo_id: null, todo_hash: null }, { touch: false }); continue; }
+        if (item['@removed']) { update('tasks', t.id, { todo_id: null, todo_hash: null, todo_user_id: null }, { touch: false }); continue; }
         if (item.status === 'completed' && t.status === 'Open') {
           require('./logic').completeTask(t.id, true);
         }
       }
-      if (j['@odata.deltaLink']) { setState('todoDelta', { link: j['@odata.deltaLink'] }); url = null; }
+      if (j['@odata.deltaLink']) { setState(K('todoDelta'), { link: j['@odata.deltaLink'] }); url = null; }
       else url = j['@odata.nextLink'];
     }
-    // Push: open tasks, plus recently finished ones that are still mirrored.
-    const rows = db.prepare(`SELECT * FROM tasks WHERE (status = 'Open') OR (todo_id IS NOT NULL)`).all();
-    for (const t of rows) {
+    // Push: their open tasks, plus finished or handed-on ones still in their list.
+    for (const t of todoRows()) {
       try {
-        if (t.status === 'Dropped') {
+        if (t.status === 'Dropped' || (t.todo_user_id === cur() && t.owner_id !== cur())) {
           if (t.todo_id) { await graphFetch('DELETE', `/me/todo/lists/${listId}/tasks/${t.todo_id}`).catch(e => { if (e.status !== 404) throw e; }); }
-          update('tasks', t.id, { todo_id: null, todo_hash: null }, { touch: false });
+          update('tasks', t.id, { todo_id: null, todo_hash: null, todo_user_id: null }, { touch: false });
           continue;
         }
         const body = todoPayload(t); const h = hashOf(body);
@@ -464,9 +497,9 @@ async function syncTodo() {
           if (t.status !== 'Open') continue;
           const r = await graphFetch('POST', `/me/todo/lists/${listId}/tasks`, body); t.todo_id = r.id;
         }
-        update('tasks', t.id, { todo_id: t.status === 'Done' ? null : t.todo_id, todo_hash: t.status === 'Done' ? null : h }, { touch: false });
+        update('tasks', t.id, { todo_id: t.status === 'Done' ? null : t.todo_id, todo_hash: t.status === 'Done' ? null : h, todo_user_id: t.status === 'Done' ? null : cur() }, { touch: false });
       } catch (e) {
-        if (e.status === 404 && /list/i.test(e.message)) { setState('todoList', null); throw e; }
+        if (e.status === 404 && /list/i.test(e.message)) { setState(K('todoList'), null); throw e; }
         setGraphStatus({ lastError: 'To Do: ' + e.message });
       }
     }
@@ -477,50 +510,65 @@ async function syncTodo() {
 
 // Keeps a Graph subscription alive so Microsoft notifies /api/graph/notify when the calendar changes.
 async function ensureSubscription() {
-  if (!isConnected() || !/^https:\/\//.test(siteOrigin()) || /localhost|127\.0\.0\.1/.test(siteOrigin())) return null;
-  const sub = getState('subscription');
+  if (!isConnected(cur()) || !/^https:\/\//.test(siteOrigin()) || /localhost|127\.0\.0\.1/.test(siteOrigin())) return null;
+  const sub = getState(K('subscription'));
   const expiry = new Date(Date.now() + 10000 * 60e3).toISOString(); // just under the 10,080-minute maximum
   if (sub && sub.id && sub.url === notifyUrl()) {
     if (Date.parse(sub.expires) - Date.now() > 2 * 864e5) return sub;
     try {
       const r = await graphFetch('PATCH', `/subscriptions/${sub.id}`, { expirationDateTime: expiry });
-      setState('subscription', { ...sub, expires: r.expirationDateTime || expiry });
-      return getState('subscription');
+      setState(K('subscription'), { ...sub, expires: r.expirationDateTime || expiry });
+      return getState(K('subscription'));
     } catch (e) { if (e.status !== 404) throw e; }
   }
   const r = await graphFetch('POST', '/subscriptions', {
     changeType: 'created,updated,deleted', resource: '/me/events', notificationUrl: notifyUrl(), lifecycleNotificationUrl: notifyUrl(),
     expirationDateTime: expiry, clientState: clientState()
   });
-  setState('subscription', { id: r.id, expires: r.expirationDateTime, url: notifyUrl() });
-  logJob('outlook', 'Live updates from Outlook switched on');
-  return getState('subscription');
+  setState(K('subscription'), { id: r.id, expires: r.expirationDateTime, url: notifyUrl() });
+  logJob('outlook', `Live updates from Outlook switched on (user ${cur()})`);
+  return getState(K('subscription'));
 }
 
-// Checks a notification body from Microsoft. Returns what kind it is, or null if it isn't genuine.
+// Checks a notification body from Microsoft. Returns [{ uid, kind }] for the people whose calendars
+// changed, or null if it isn't genuine. clientState is "<userId>.<signature>".
 function checkNotification(body) {
   const items = (body && body.value) || [];
   if (!items.length) return null;
-  const cs = clientState();
-  if (!items.every(i => i.clientState === cs)) return null;
-  return items.some(i => i.lifecycleEvent) ? 'lifecycle:' + items.map(i => i.lifecycleEvent).filter(Boolean).join(',') : 'changed';
+  const out = new Map();
+  for (const i of items) {
+    const uid = Number(String(i.clientState || '').split('.')[0]);
+    if (!uid || i.clientState !== clientStateFor(uid)) return null;
+    const kind = i.lifecycleEvent ? 'lifecycle:' + i.lifecycleEvent : 'changed';
+    out.set(uid, out.has(uid) && out.get(uid) !== 'changed' ? out.get(uid) : kind);
+  }
+  return [...out].map(([uid, kind]) => ({ uid, kind }));
 }
 
 /* ------------------------------------------------------------ scheduling */
 
-// Sends anything queued during this request (pushes, To Do changes) and keeps the subscription fresh.
+// Sends anything changed during this request – appointments to their owner's calendar, tasks to their
+// owner's To Do – and keeps the signed-in person's live-update subscription fresh.
 async function flush({ budgetMs = 15e3 } = {}) {
-  if (!isConnected()) { pending.push = pending.todo = false; return; }
   const t0 = Date.now();
-  try {
-    if (pending.push) { pending.push = false; await processPushQueue(); }
-    if (pending.todo && getSettings().todoMirror && Date.now() - t0 < budgetMs) { pending.todo = false; await syncTodo(); }
-    if (Date.now() - t0 < budgetMs) await ensureSubscription();
-  } catch (e) { setGraphStatus({ lastError: e.message }); }
+  const me = currentUserId();
+  const users = connectedUsers();
+  // The signed-in person first.
+  users.sort((a, b) => (b === me) - (a === me));
+  for (const uid of users) {
+    if (Date.now() - t0 > budgetMs) break;
+    await as(uid, async () => {
+      try {
+        if (db.prepare("SELECT 1 FROM appointments WHERE owner_id = ? AND sync_status = 'Pending' LIMIT 1").get(uid)) await processPushQueue();
+        if (getSettings().todoMirror && Date.now() - t0 < budgetMs && todoDirty()) await syncTodo();
+        if (uid === me && Date.now() - t0 < budgetMs) await ensureSubscription();
+      } catch (e) { setGraphStatus({ lastError: e.message }); }
+    });
+  }
 }
 
 async function syncNow({ budgetMs = 20e3, forceFresh = false } = {}) {
-  if (!isConnected()) return { connected: false };
+  if (!isConnected(cur())) return { connected: false };
   const result = {};
   try {
     await processPushQueue();
@@ -538,28 +586,32 @@ async function syncNow({ budgetMs = 20e3, forceFresh = false } = {}) {
 }
 
 function needsSync(maxAgeMs = 5 * 60e3) {
-  if (!isConnected()) return false;
-  const st = graphStatus(), cd = getState('calDelta');
+  if (!isConnected(cur())) return false;
+  const st = graphStatus(), cd = getState(K('calDelta'));
   return !st.lastPullMs || Date.now() - st.lastPullMs > maxAgeMs || !!(cd && cd.next);
 }
 
-function status() {
-  const t = getState('msTokens');
-  const st = graphStatus();
-  const sub = getState('subscription');
-  return {
-    configured: configured(), managed: configured(), connected: isConnected(), account: t && t.account, redirectUri: redirectUri(),
-    lastPull: st.lastPull || null, lastPush: st.lastPush || null, lastError: st.lastError || null,
-    live: !!(sub && sub.id && Date.parse(sub.expires) > Date.now()),
-    pending: db.prepare("SELECT COUNT(*) n FROM appointments WHERE sync_status = 'Pending'").get().n,
-    errors: db.prepare("SELECT COUNT(*) n FROM appointments WHERE sync_status = 'Error'").get().n
-  };
+// Outlook status for one person (the one we are working for, by default).
+function status(uid) {
+  return withUser(uid, () => {
+    const t = getState(K('msTokens'));
+    const st = graphStatus();
+    const sub = getState(K('subscription'));
+    return {
+      configured: configured(), managed: configured(), connected: isConnected(cur()), account: t && t.account, redirectUri: redirectUri(),
+      lastPull: st.lastPull || null, lastPush: st.lastPush || null, lastError: st.lastError || null,
+      live: !!(sub && sub.id && Date.parse(sub.expires) > Date.now()),
+      pending: db.prepare("SELECT COUNT(*) n FROM appointments WHERE owner_id = ? AND sync_status = 'Pending'").get(cur()).n,
+      errors: db.prepare("SELECT COUNT(*) n FROM appointments WHERE owner_id = ? AND sync_status = 'Error'").get(cur()).n
+    };
+  });
 }
+// Synchronous version of as() for quick reads.
+function withUser(uid, fn) { const prev = gu; gu = Number(uid || gu || currentUserId()) || null; try { return fn(); } finally { gu = prev; } }
 
 function retryErrors() {
-  db.prepare("UPDATE appointments SET sync_status = 'Pending', sync_attempts = 0 WHERE sync_status = 'Error'").run();
-  pending.push = true;
+  db.prepare("UPDATE appointments SET sync_status = 'Pending', sync_attempts = 0 WHERE owner_id = ? AND sync_status = 'Error'").run(cur());
 }
 
 module.exports = { setOrigin, startAuth, finishAuth, disconnect, isConnected, configured, queuePush, queueCancel, queueTodoSync, syncNow, flush, needsSync,
-  status, retryErrors, graphFetch, checkNotification, ensureSubscription, clientState };
+  status, retryErrors, graphFetch, checkNotification, ensureSubscription, clientState, clientStateFor, as, withUser, connectedUsers };

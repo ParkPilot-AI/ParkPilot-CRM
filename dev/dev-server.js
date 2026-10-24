@@ -3,7 +3,8 @@
 // Local test server that behaves like the Netlify site: serves public/ and sends /api/* and /auth/*
 // to the same handler the Netlify Function uses. Data is kept in ./data.
 //   DEV_FAKE_LOGIN=you@example.com OWNER_EMAILS=you@example.com node dev/dev-server.js
-// With DEV_FAKE_LOGIN set, "Sign in" skips Microsoft and signs you in as that address (testing only).
+// With DEV_FAKE_LOGIN set, "Sign in" skips Microsoft and signs you in as that address (testing only);
+// /auth/login?as=other@example.com signs in as someone else on the team.
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -19,7 +20,8 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 http.createServer(async (req, res) => {
   const u = new URL(req.url, `http://localhost:${PORT}`);
   if (u.pathname === '/auth/login' && process.env.DEV_FAKE_LOGIN) {
-    const email = process.env.DEV_FAKE_LOGIN.toLowerCase();
+    // ?as=someone@example.com signs in as another team member (testing roles).
+    const email = (u.searchParams.get('as') || process.env.DEV_FAKE_LOGIN).toLowerCase();
     const session = auth.seal({ email, name: email, iat: Date.now(), exp: Date.now() + 14 * 864e5 });
     res.writeHead(302, { Location: u.searchParams.get('return') || '/', 'Set-Cookie': `cf_session=${encodeURIComponent(session)}; Path=/; HttpOnly; SameSite=Lax` });
     return res.end();

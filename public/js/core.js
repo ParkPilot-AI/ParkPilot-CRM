@@ -273,3 +273,27 @@ export function options(list, selected, { blank } = {}) {
 
 export const bus = new EventTarget(); // 'changed' => views refresh
 export function changed() { bus.dispatchEvent(new Event('changed')); }
+
+/* ------------------------------------------------------ people and roles */
+
+export const me = () => (state.meta && state.meta.user) || {};
+export const isMgr = () => !!me().isManager;
+export const isGroupMgr = () => !!me().isGroup;
+export const team = () => (state.meta && state.meta.team) || [];
+export const personName = id => (team().find(x => x.id === Number(id)) || {}).name || '';
+const multiPark = () => new Set(team().map(x => x.park_id)).size > 1;
+
+// <option>s for choosing a team member (grouped by park for group managers), optionally with "Unallocated".
+export function teamOptions(selected, { unallocated = false, unallocatedLabel = 'Unallocated' } = {}) {
+  const opt = x => `<option value="${x.id}"${String(x.id) === String(selected ?? '') ? ' selected' : ''}>${esc(x.name)}${x.id === me().id ? ' (you)' : ''}</option>`;
+  let html = unallocated ? `<option value=""${!selected ? ' selected' : ''}>${esc(unallocatedLabel)}</option>` : '';
+  if (multiPark()) {
+    const groups = new Map();
+    for (const x of team()) { const k = x.park_name || 'All parks'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); }
+    html += [...groups].map(([k, xs]) => `<optgroup label="${esc(k)}">${xs.map(opt).join('')}</optgroup>`).join('');
+  } else html += team().map(opt).join('');
+  return html;
+}
+export function parkOptions(selected, { blank } = {}) {
+  return options(((state.meta && state.meta.parks) || []).map(p => ({ value: p.id, label: p.name })), selected, blank !== undefined ? { blank } : {});
+}
