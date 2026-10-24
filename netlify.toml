@@ -1,0 +1,17 @@
+# Coastfields Customer Portal – Netlify configuration.
+[build]
+  publish = "public"
+
+[functions]
+  node_bundler = "esbuild"
+  # sql.js (SQLite) loads a WebAssembly file at run time; make sure it is packaged with the functions.
+  included_files = ["node_modules/sql.js/dist/sql-wasm.wasm"]
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"
+    Strict-Transport-Security = "max-age=31536000"
+    Content-Security-Policy = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'"

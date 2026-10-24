@@ -1,0 +1,15 @@
+{
+  "name": "coastfields-customer-portal",
+  "version": "3.0.0",
+  "private": true,
+  "description": "Coastfields Customer Portal – sales CRM on Netlify with Microsoft sign-in and Outlook sync.",
+  "scripts": {
+    "test": "node --test test/logic.test.js test/graph.test.js test/handler.test.js test/blobs.test.js",
+    "dev": "node dev/dev-server.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@netlify/blobs": "^10.0.0",
+    "sql.js": "^1.11.0"
+  }
+}

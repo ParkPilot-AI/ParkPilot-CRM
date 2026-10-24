@@ -1,0 +1,12 @@
+@font-face { font-family: "Figtree"; src: url("/fonts/figtree.woff2") format("woff2"); font-weight: 300 900; font-display: swap; }
+body.plain { font-family: 'Figtree', system-ui, -apple-system, 'Segoe UI', sans-serif; background: #eef3f6; color: #15314b; display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }
+.plain .box { background: #fff; padding: 32px 36px; border-radius: 14px; max-width: 440px; border: 1px solid #d9e3ea; }
+.plain .logo { height: 38px; display: block; }
+.plain h2 { margin: 22px 0 8px; font-size: 22px; }
+.plain p { color: #4a6175; line-height: 1.5; }
+.plain .btn { display: inline-flex; align-items: center; gap: 10px; background: #2f7fbf; color: #fff; padding: 11px 18px; border-radius: 6px; text-decoration: none; font-weight: 700; }
+.plain .btn:hover { background: #23679e; }
+.plain .ms { width: 18px; height: 18px; display: inline-grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+.plain .ms i { display: block; }
+.plain .ms i:nth-child(1) { background: #f25022; } .plain .ms i:nth-child(2) { background: #7fba00; }
+.plain .ms i:nth-child(3) { background: #00a4ef; } .plain .ms i:nth-child(4) { background: #ffb900; }
