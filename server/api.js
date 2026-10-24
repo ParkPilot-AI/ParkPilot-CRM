@@ -29,7 +29,7 @@ route('GET', '/api/meta', ({ user }) => ({
   hosted: true, user,
   stages: L.STAGES, openStages: L.OPEN_STAGES, apptTypes: L.APPT_TYPES, categories: L.CATEGORIES, priorities: L.PRIORITIES,
   leadStatuses: L.LEAD_STATUSES, contactTypes: ['Prospect', 'Owner', 'Partner'],
-  dealTypes: ['New sale', 'Upgrade with part-ex', 'Upgrade, no part-ex', 'Pre-owned sale'],
+  dealTypes: ['New sale', 'Upgrade with part-ex', 'Upgrade, no part-ex', 'Pre-owned sale'], paymentStatuses: L.PAYMENT_STATUSES,
   homeStatuses: ['Available', 'Reserved', 'Sold', 'Owner-held', 'Part-ex in'], plotStatuses: ['Vacant', 'Reserved', 'Occupied'],
   settings: getSettings(), today: U.today(), now: U.nowLocal(), outlook: graph.status()
 }));
@@ -60,10 +60,10 @@ route('GET', '/api/dashboard', () => {
   const pipeline = L.OPEN_STAGES.map(stage => ({ stage, count: db.prepare('SELECT COUNT(*) n FROM deals WHERE stage = ?').get(stage).n }));
   const monthStart = day.slice(0, 8) + '01';
   const reserved = db.prepare(`SELECT COALESCE(SUM(COALESCE(price,0) - COALESCE(part_ex_allowance,0)),0) v, COUNT(*) n FROM deals
-                               WHERE stage IN ('Reserved','Finance and paperwork','Siting and handover','Completed') AND substr(stage_changed_at,1,10) >= ?`).get(monthStart);
+                               WHERE stage IN ('Finance & Paperwork','Siting & Handover','Completed') AND substr(stage_changed_at,1,10) >= ?`).get(monthStart);
   const warmCut = U.addDays(day, -7);
   const warm = db.prepare(`SELECT c.id, c.first_name, c.last_name, c.lead_source, COALESCE(c.last_contact_at, c.enquiry_date) AS last_touch, d.stage
-                           FROM contacts c JOIN deals d ON d.contact_id = c.id AND d.stage IN ('Enquiry','Viewing booked','Viewed','Proposal')
+                           FROM contacts c JOIN deals d ON d.contact_id = c.id AND d.stage IN ('Enquiry','Appointment','Park Tour')
                            WHERE c.lead_status IN ('New','Contacted','Nurture') AND substr(COALESCE(c.last_contact_at, c.enquiry_date, c.created_at),1,10) <= ?
                            AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.contact_id = c.id AND t.status = 'Open')
                            AND NOT EXISTS (SELECT 1 FROM appointments a WHERE a.contact_id = c.id AND a.status = 'Scheduled' AND a.start >= ?)
@@ -257,6 +257,7 @@ route('PATCH', '/api/deals/:id', ({ params, body }) => {
   const d = need(get('deals', int(params.id)), 'Deal');
   const patch = { ...body }; delete patch.stage; delete patch.contact_id;
   update('deals', d.id, patch);
+  if ('payment_status' in body && body.payment_status !== d.payment_status) L.paymentRecorded(d.id, body.payment_status);
   return get('deals', d.id);
 });
 route('POST', '/api/deals/:id/stage', ({ params, body }) => { L.setDealStage(int(params.id), body.stage, { lostReason: body.lostReason }); return get('deals', int(params.id)); });

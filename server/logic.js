@@ -2,9 +2,14 @@
 const { db, tx, insert, update, get, getSettings, setState, getState, logJob } = require('./db');
 const U = require('./util');
 
-const STAGES = ['Enquiry', 'Viewing booked', 'Viewed', 'Proposal', 'Reserved', 'Finance and paperwork', 'Siting and handover', 'Completed', 'Lost'];
-const OPEN_STAGES = STAGES.slice(0, 7);
-const APPT_TYPES = ['Viewing', 'Part-ex valuation', 'Finance meeting', 'Handover', 'Phone call', 'Teams call'];
+// The sales pipeline. Deals move forward automatically as things happen (see advanceDeal below):
+//   Enquiry -> Appointment (appointment booked) -> Park Tour (presentation given: quote, payment,
+//   next steps) -> Finance & Paperwork (deposit or payment in full) -> Siting & Handover (handover
+//   booked) -> Completed (keys handed over). "Park not right for the customer" closes it as Lost.
+const STAGES = ['Enquiry', 'Appointment', 'Park Tour', 'Finance & Paperwork', 'Siting & Handover', 'Completed', 'Lost'];
+const OPEN_STAGES = STAGES.slice(0, 5);
+const APPT_TYPES = ['Park tour', 'Part-ex valuation', 'Finance meeting', 'Handover', 'Phone call', 'Teams call'];
+const PAYMENT_STATUSES = ['None yet', 'Deposit', 'Paid in full'];
 const CATEGORIES = ['Follow-up', 'Call', 'Email', 'Admin'];
 const PRIORITIES = ['High', 'Medium', 'Low'];
 const LEAD_STATUSES = ['New', 'Contacted', 'Nurture', 'Dormant', 'Customer', 'Lost'];
@@ -188,21 +193,18 @@ function mergeContacts(keepId, otherIds) {
 /* ----------------------------------------------------------------- deals */
 
 const STAGE_TASKS = {
-  'Viewed': [{ title: 'Send price and plot details', category: 'Email', priority: 'High', days: 2 }],
-  'Proposal': [{ title: 'Chase decision on proposal', category: 'Call', priority: 'Medium', days: 3 }],
-  'Reserved': [
-    { title: 'Chase finance decision', category: 'Follow-up', priority: 'High', days: 5 },
+  'Park Tour': [{ title: 'Follow up on quote and next steps', category: 'Call', priority: 'High', days: 2 }],
+  'Finance & Paperwork': [
+    { title: 'Chase finance decision', category: 'Follow-up', priority: 'High', days: 5, when: (d, c) => c && c.finance_needed },
+    { title: 'Send licence agreement', category: 'Email', priority: 'Medium', days: 2 },
+    { title: 'Confirm balance payment date', category: 'Call', priority: 'Medium', days: 7, when: d => d.payment_status !== 'Paid in full' },
     { title: 'Book handover', category: 'Admin', priority: 'Medium', handoverOffset: -14, days: 14 }
   ],
-  'Finance and paperwork': [
-    { title: 'Send licence agreement', category: 'Email', priority: 'Medium', days: 2 },
-    { title: 'Confirm balance payment date', category: 'Call', priority: 'Medium', days: 7 }
-  ],
-  'Siting and handover': [{ title: 'Confirm siting, connections and keys', category: 'Admin', priority: 'High', days: 3 }],
+  'Siting & Handover': [{ title: 'Confirm siting, connections and keys', category: 'Admin', priority: 'High', days: 3 }],
   'Completed': [{ title: 'Welcome call after first stay', category: 'Call', priority: 'Low', days: 14 }]
 };
 
-function setDealStage(dealId, stage, { lostReason } = {}) {
+function setDealStage(dealId, stage, { lostReason, skipTasks = false, reason } = {}) {
   if (!STAGES.includes(stage)) throw httpError(400, 'Unknown stage');
   const d = get('deals', dealId);
   if (!d) throw httpError(404, 'Deal not found');
@@ -210,8 +212,10 @@ function setDealStage(dealId, stage, { lostReason } = {}) {
   const s = getSettings();
   tx(() => {
     update('deals', dealId, { stage, stage_changed_at: U.nowStamp(), lost_reason: stage === 'Lost' ? (lostReason || d.lost_reason) : d.lost_reason });
-    insert('interactions', { contact_id: d.contact_id, deal_id: dealId, type: 'Deal', at: U.nowLocal(), summary: `Deal moved from ${d.stage} to ${stage}${stage === 'Lost' && lostReason ? ' – ' + lostReason : ''}.` });
-    for (const tpl of STAGE_TASKS[stage] || []) {
+    insert('interactions', { contact_id: d.contact_id, deal_id: dealId, type: 'Deal', at: U.nowLocal(), summary: `Deal moved from ${d.stage} to ${stage}${stage === 'Lost' && lostReason ? ' – ' + lostReason : reason ? ' (' + reason + ')' : ''}.` });
+    const contact = get('contacts', d.contact_id);
+    for (const tpl of skipTasks ? [] : STAGE_TASKS[stage] || []) {
+      if (tpl.when && !tpl.when(d, contact)) continue;
       let due = U.addDays(U.today(), tpl.days);
       if (tpl.handoverOffset && d.target_handover) due = U.addDays(d.target_handover, tpl.handoverOffset);
       if (due < U.today()) due = U.today();
@@ -219,7 +223,7 @@ function setDealStage(dealId, stage, { lostReason } = {}) {
         contact_id: d.contact_id, deal_id: dealId, auto_key: `deal:${dealId}:${stage}:${tpl.title}` });
     }
     if (d.stage === 'Lost' && OPEN_STAGES.includes(stage)) db.prepare("UPDATE contacts SET lead_status = 'Contacted' WHERE id = ? AND lead_status = 'Lost'").run(d.contact_id);
-    if (stage === 'Reserved') {
+    if (stage === 'Finance & Paperwork' || stage === 'Siting & Handover') {
       if (d.home_id) update('homes', d.home_id, { status: 'Reserved' });
       if (d.plot_id) update('plots', d.plot_id, { status: 'Reserved' });
     }
@@ -240,6 +244,27 @@ function setDealStage(dealId, stage, { lostReason } = {}) {
   graph().queueTodoSync();
 }
 
+// Moves a deal on to `stage` only if that is further along than where it is now (never backwards,
+// never out of Completed or Lost). Returns true if it moved.
+function advanceDeal(dealId, stage, opts = {}) {
+  const d = dealId && get('deals', dealId);
+  if (!d || !OPEN_STAGES.includes(d.stage)) return false;
+  if (STAGES.indexOf(stage) <= STAGES.indexOf(d.stage)) return false;
+  setDealStage(dealId, stage, opts);
+  return true;
+}
+
+// The open deal for a contact, creating one at Enquiry if they have none (e.g. a dormant lead booking a tour).
+function ensureDeal(contactId) {
+  const d = db.prepare("SELECT id FROM deals WHERE contact_id = ? AND stage NOT IN ('Completed','Lost') ORDER BY updated_at DESC LIMIT 1").get(contactId);
+  if (d) return d.id;
+  const c = get('contacts', contactId);
+  const id = insert('deals', { contact_id: contactId, stage: 'Enquiry', stage_changed_at: U.nowStamp(), deal_type: c && c.type === 'Owner' ? 'Upgrade with part-ex' : 'New sale' });
+  insert('interactions', { contact_id: contactId, deal_id: id, type: 'Deal', at: U.nowLocal(), summary: 'New deal opened.' });
+  if (c && ['Dormant', 'Lost'].includes(c.lead_status)) update('contacts', contactId, { lead_status: 'Contacted' });
+  return id;
+}
+
 /* ---------------------------------------------------------- appointments */
 
 function busyBlocks(fromDay, toDay, excludeApptId) {
@@ -252,7 +277,7 @@ function busyBlocks(fromDay, toDay, excludeApptId) {
   return [...appts, ...ext].map(b => ({ start: b.start, end: b.end }));
 }
 
-function suggestSlots({ type = 'Viewing', from, days = 14, count = 3, excludeApptId, duration } = {}) {
+function suggestSlots({ type = 'Park tour', from, days = 14, count = 3, excludeApptId, duration } = {}) {
   const s = getSettings();
   const dur = Number(duration) || s.durations[type] || 60;
   const buffer = s.bufferMinutes || 0;
@@ -310,15 +335,18 @@ function syncAutoTasks(appt) {
 
 function createAppointment(data) {
   const s = getSettings();
-  const type = APPT_TYPES.includes(data.type) ? data.type : 'Viewing';
+  const type = APPT_TYPES.includes(data.type) ? data.type : 'Park tour';
   if (!data.start) throw httpError(400, 'Choose a start time');
   const dur = Number(data.duration) || s.durations[type] || 60;
   const end = data.end || U.addMinutes(data.start, dur);
   const contact = data.contact_id ? get('contacts', data.contact_id) : null;
   let dealId = data.deal_id || null;
   if (!dealId && contact) {
-    const d = db.prepare("SELECT id FROM deals WHERE contact_id = ? AND stage NOT IN ('Completed','Lost') ORDER BY updated_at DESC LIMIT 1").get(contact.id);
-    if (d) dealId = d.id;
+    // Booking anything other than a quick phone call means they're in the pipeline.
+    if (type === 'Phone call') {
+      const d = db.prepare("SELECT id FROM deals WHERE contact_id = ? AND stage NOT IN ('Completed','Lost') ORDER BY updated_at DESC LIMIT 1").get(contact.id);
+      if (d) dealId = d.id;
+    } else dealId = ensureDeal(contact.id);
   }
   const isRemote = data.is_remote ? 1 : (type === 'Teams call' ? 1 : 0);
   const id = tx(() => {
@@ -334,13 +362,8 @@ function createAppointment(data) {
         summary: `${type} booked for ${fmtWhen(data.start)}.` });
       touchContact(contact.id);
     }
-    if (type === 'Viewing' && dealId) {
-      const d = get('deals', dealId);
-      if (d && d.stage === 'Enquiry') {
-        update('deals', dealId, { stage: 'Viewing booked', stage_changed_at: U.nowStamp() });
-        insert('interactions', { contact_id: d.contact_id, deal_id: dealId, type: 'Deal', at: U.nowLocal(), summary: 'Deal moved from Enquiry to Viewing booked.' });
-      }
-    }
+    if (dealId && type === 'Handover') advanceDeal(dealId, 'Siting & Handover', { reason: 'handover booked' });
+    else if (dealId && type !== 'Phone call') advanceDeal(dealId, 'Appointment', { reason: `${type.toLowerCase()} booked` });
     if (type === 'Part-ex valuation' && dealId) {
       const d = get('deals', dealId);
       if (d && d.deal_type === 'New sale' && contact && contact.type === 'Owner') update('deals', dealId, { deal_type: 'Upgrade with part-ex' });
@@ -387,7 +410,7 @@ function cancelAppointment(id, { message, fromOutlook = false } = {}) {
     if (a.contact_id) {
       insert('interactions', { contact_id: a.contact_id, deal_id: a.deal_id, type: 'Appointment', at: U.nowLocal(), appointment_id: id,
         summary: `${a.type} on ${fmtWhen(a.start)} cancelled${fromOutlook ? ' in Outlook' : ''}${message ? ': ' + message : '.'}` });
-      if (fromOutlook || a.type === 'Viewing') {
+      if (fromOutlook || a.type === 'Park tour') {
         const c = get('contacts', a.contact_id);
         createTask({ title: `Rebook ${a.type.toLowerCase()} with ${c ? (c.first_name + ' ' + c.last_name).trim() : 'customer'}`, category: 'Follow-up', priority: 'High',
           due_date: U.today(), contact_id: a.contact_id, deal_id: a.deal_id, auto_key: `appt:${id}:rebook` });
@@ -398,27 +421,73 @@ function cancelAppointment(id, { message, fromOutlook = false } = {}) {
   graph().queueTodoSync();
 }
 
-function recordOutcome(id, { outcome, notes, nextStage }) {
+function recordOutcome(id, input = {}) {
+  const { outcome, notes, nextStage, result, quote_price, home_id, payment_type, payment_amount, next_steps, next_step_date } = input;
   const a = get('appointments', id);
   if (!a) throw httpError(404, 'Appointment not found');
+  const s = getSettings();
+  const money = v => '£' + Number(v).toLocaleString('en-GB');
+  const isTour = a.type === 'Park tour' && !!result;
+  const parts = [outcome];
+  if (isTour && result === 'presented') {
+    if (quote_price) parts.push(`quoted ${money(quote_price)}`);
+    if (payment_type && payment_type !== 'None yet') parts.push(`${payment_type.toLowerCase()}${payment_amount ? ' ' + money(payment_amount) : ''} taken`);
+    if (next_steps) parts.push(`next: ${next_steps}${next_step_date ? ' (' + fmtWhen(next_step_date + 'T09:00').split(',')[0] + ')' : ''}`);
+  }
+  const summary = parts.filter(Boolean).join('; ');
+  let dealId = a.deal_id;
   tx(() => {
-    update('appointments', id, { outcome, status: a.status === 'Cancelled' ? 'Cancelled' : 'Completed', notes: notes ? [a.notes, notes].filter(Boolean).join('\n') : a.notes });
+    update('appointments', id, { outcome: summary, status: a.status === 'Cancelled' ? 'Cancelled' : (result === 'no_show' ? 'Cancelled' : 'Completed'), notes: notes ? [a.notes, notes].filter(Boolean).join('\n') : a.notes });
     if (a.contact_id) {
-      insert('interactions', { contact_id: a.contact_id, deal_id: a.deal_id, type: 'Meeting', at: U.nowLocal(), appointment_id: id,
-        summary: `${a.type} outcome: ${outcome}${notes ? ' – ' + notes : ''}` });
+      insert('interactions', { contact_id: a.contact_id, deal_id: dealId, type: 'Meeting', at: U.nowLocal(), appointment_id: id,
+        summary: `${a.type} outcome: ${summary}${notes ? ' – ' + notes : ''}` });
       touchContact(a.contact_id);
     }
-    const follow = db.prepare("SELECT * FROM tasks WHERE auto_key = ? AND status = 'Open'").get(`appt:${id}:follow`);
-    if (follow) update('tasks', follow.id, { title: `Follow up: ${outcome}` });
     db.prepare("UPDATE tasks SET status = 'Done', completed_at = ? WHERE auto_key = ? AND status = 'Open'").run(U.nowStamp(), `appt:${id}:prep`);
+    const follow = db.prepare("SELECT * FROM tasks WHERE auto_key = ? AND status = 'Open'").get(`appt:${id}:follow`);
+
+    if (isTour && a.contact_id) {
+      if (!dealId && result !== 'no_show') { dealId = ensureDeal(a.contact_id); update('appointments', id, { deal_id: dealId }, { touch: false }); }
+      if (result === 'not_right') {
+        if (follow) update('tasks', follow.id, { status: 'Dropped', drop_reason: 'Park not right for customer', completed_at: U.nowStamp() });
+        setDealStage(dealId, 'Lost', { lostReason: 'Park not right for customer' });
+      } else if (result === 'no_show') {
+        if (follow) update('tasks', follow.id, { status: 'Dropped', drop_reason: 'Did not attend', completed_at: U.nowStamp() });
+        const c = get('contacts', a.contact_id);
+        createTask({ title: `Rebook park tour with ${c ? (c.first_name + ' ' + c.last_name).trim() : 'customer'}`, category: 'Call', priority: 'High',
+          due_date: U.today(), contact_id: a.contact_id, deal_id: dealId, auto_key: `appt:${id}:rebook` });
+      } else {
+        const patch = {};
+        if (quote_price) patch.price = Number(quote_price);
+        if (home_id) patch.home_id = Number(home_id);
+        if (payment_type) patch.payment_status = payment_type;
+        if (payment_amount) patch.deposit = Number(payment_amount);
+        if (Object.keys(patch).length) update('deals', dealId, patch);
+        // The tour's own follow-up becomes the agreed next step (or the standard follow-up if none was agreed).
+        if (next_steps) {
+          const due = next_step_date && next_step_date >= U.today() ? next_step_date : U.nextOpenDay(U.addDays(U.today(), 2), s.closedDays);
+          if (follow) update('tasks', follow.id, { title: `Next step: ${next_steps}`, due_date: due, original_due_date: null, deal_id: dealId });
+          else createTask({ title: `Next step: ${next_steps}`, category: 'Follow-up', priority: 'High', due_date: due, contact_id: a.contact_id, deal_id: dealId });
+        } else if (follow) update('tasks', follow.id, { status: 'Dropped', drop_reason: 'Replaced by stage task', completed_at: U.nowStamp() });
+        advanceDeal(dealId, 'Park Tour', { skipTasks: !!next_steps, reason: 'presentation given' });
+        if (payment_type === 'Deposit' || payment_type === 'Paid in full') advanceDeal(dealId, 'Finance & Paperwork', { reason: `${payment_type.toLowerCase()} taken` });
+      }
+    } else {
+      if (follow) update('tasks', follow.id, { title: `Follow up: ${summary}` });
+      if (a.type === 'Handover' && dealId && /keys|handed over|complete/i.test(outcome || '')) advanceDeal(dealId, 'Completed', { reason: 'keys handed over' });
+    }
   });
-  if (a.deal_id) {
-    const d = get('deals', a.deal_id);
-    let stage = nextStage;
-    if (!stage && a.type === 'Viewing' && d && ['Enquiry', 'Viewing booked'].includes(d.stage)) stage = 'Viewed';
-    if (stage && d && d.stage !== stage) setDealStage(a.deal_id, stage);
+  if (nextStage && dealId) {
+    const d = get('deals', dealId);
+    if (d && d.stage !== nextStage) setDealStage(dealId, nextStage);
   }
   graph().queueTodoSync();
+}
+
+// A deal's payment was recorded (deposit or paid in full) outside a park tour.
+function paymentRecorded(dealId, paymentStatus) {
+  if (paymentStatus === 'Deposit' || paymentStatus === 'Paid in full') return advanceDeal(dealId, 'Finance & Paperwork', { reason: `${paymentStatus.toLowerCase()} taken` });
+  return false;
 }
 
 function fmtWhen(dt) {
@@ -432,7 +501,7 @@ function fmtWhen(dt) {
 function httpError(status, message) { const e = new Error(message); e.status = status; return e; }
 
 module.exports = {
-  STAGES, OPEN_STAGES, APPT_TYPES, CATEGORIES, PRIORITIES, LEAD_STATUSES,
+  STAGES, OPEN_STAGES, APPT_TYPES, CATEGORIES, PRIORITIES, LEAD_STATUSES, PAYMENT_STATUSES, advanceDeal, ensureDeal, paymentRecorded,
   urgencyOf, decorateTask, rollOverTasks, maybeScheduledRollover, createTask, completeTask, snoozeTask, reviewTask,
   addInteraction, logCall, mergeContacts, touchContact, setDealStage,
   suggestSlots, createAppointment, updateAppointment, cancelAppointment, recordOutcome, fmtWhen, httpError, syncAutoTasks

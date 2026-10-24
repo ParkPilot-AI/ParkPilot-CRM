@@ -130,7 +130,7 @@ test('an Outlook event with a known customer is linked automatically; personal e
   assert.equal(D.db.prepare('SELECT COUNT(*) n FROM appointments WHERE outlook_event_id = ?').get(id2).n, 0);
   assert.ok(D.db.prepare('SELECT 1 FROM outlook_events WHERE id = ?').get(id2));
   // The cached personal event blocks slot suggestions.
-  const { all } = L.suggestSlots({ type: 'Viewing', from: when, days: 0 });
+  const { all } = L.suggestSlots({ type: 'Park tour', from: when, days: 0 });
   assert.ok(!all.some(s => s.start < `${when}T17:15` && s.end > `${when}T15:45`));
 });
 

@@ -50,8 +50,33 @@ async function open(bytes) {
   current.exec('PRAGMA foreign_keys = ON;');
   current.exec(SCHEMA);
   txDepth = 0;
+  for (const k of Object.keys(columnsCache)) { delete columnsCache[k]; delete notNullCache[k]; }
+  migrate();
   return db;
 }
+// Brings databases saved by earlier versions up to date. Every step is safe to run repeatedly.
+function migrate() {
+  const cols = t => (current.exec(`PRAGMA table_info(${t})`)[0] || { values: [] }).values.map(r => r[1]);
+  if (!cols('deals').includes('payment_status')) current.exec('ALTER TABLE deals ADD COLUMN payment_status TEXT');
+  // October 2026: pipeline became Enquiry > Appointment > Park Tour > Finance & Paperwork > Siting & Handover.
+  current.exec(`UPDATE deals SET stage = CASE stage
+      WHEN 'Viewing booked' THEN 'Appointment' WHEN 'Viewed' THEN 'Park Tour' WHEN 'Proposal' THEN 'Park Tour'
+      WHEN 'Reserved' THEN 'Finance & Paperwork' WHEN 'Finance and paperwork' THEN 'Finance & Paperwork'
+      WHEN 'Siting and handover' THEN 'Siting & Handover' ELSE stage END
+    WHERE stage IN ('Viewing booked','Viewed','Proposal','Reserved','Finance and paperwork','Siting and handover')`);
+  current.exec("UPDATE appointments SET type = 'Park tour' WHERE type = 'Viewing'");
+  const r = current.exec("SELECT value FROM settings WHERE key = 'durations'");
+  if (r.length) {
+    try {
+      const d = JSON.parse(r[0].values[0][0]);
+      if (d.Viewing !== undefined && d['Park tour'] === undefined) {
+        d['Park tour'] = Math.max(d.Viewing, 90); delete d.Viewing;
+        const st = current.prepare("UPDATE settings SET value = ? WHERE key = 'durations'"); st.run([JSON.stringify(d)]); st.free();
+      }
+    } catch { /* leave a malformed setting alone */ }
+  }
+}
+
 function exportBytes() { return current.export(); }
 function totalChanges() { const r = current.exec('SELECT total_changes()'); return r[0].values[0][0]; }
 
@@ -166,7 +191,7 @@ CREATE TABLE IF NOT EXISTS job_log (id INTEGER PRIMARY KEY, job TEXT, at TEXT, d
 const DEFAULT_SETTINGS = {
   openingHours: { start: '09:00', end: '17:00' },
   closedDays: [],            // 0 = Sun … 6 = Sat; none closed by default
-  durations: { 'Viewing': 60, 'Part-ex valuation': 45, 'Finance meeting': 45, 'Handover': 90, 'Phone call': 15, 'Teams call': 30 },
+  durations: { 'Park tour': 90, 'Part-ex valuation': 45, 'Finance meeting': 45, 'Handover': 90, 'Phone call': 15, 'Teams call': 30 },
   bufferMinutes: 15,
   escalateAfter: 3,
   reviewAfter: 5,

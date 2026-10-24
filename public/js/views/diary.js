@@ -109,7 +109,7 @@ export async function render(el, { query }) {
         const t = tasks.find(x => String(x.id) === taskId);
         if (!t) return;
         bookDialog({ start, contact: t.contact_id ? { id: t.contact_id, first_name: t.first_name, last_name: t.last_name, email: t.contact_email } : null,
-          type: t.category === 'Call' ? 'Phone call' : 'Viewing', title: t.title, notes: t.notes || '' });
+          type: t.category === 'Call' ? 'Phone call' : 'Park tour', title: t.title, notes: t.notes || '' });
       }
     });
   });

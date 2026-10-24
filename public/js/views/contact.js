@@ -147,7 +147,7 @@ function dealCard(dl, m) {
     ${dl.price || dl.part_ex_allowance ? `<div class="money"><span>Price</span><span>${money(dl.price) || '–'}</span>
       ${dl.part_ex_allowance ? `<span>Part-ex allowance</span><span>− ${money(dl.part_ex_allowance)}</span>` : ''}
       <span class="net">To pay</span><span class="net">${money(net)}</span>
-      ${dl.deposit ? `<span class="faint">Deposit taken</span><span class="faint">${money(dl.deposit)}</span>` : ''}</div>` : ''}
+      ${dl.payment_status && dl.payment_status !== 'None yet' ? `<span>${esc(dl.payment_status)} taken</span><span>${dl.deposit ? money(dl.deposit) : '✓'}</span>` : dl.deposit ? `<span class="faint">Deposit taken</span><span class="faint">${money(dl.deposit)}</span>` : ''}</div>` : ''}
     ${dl.valuations.length ? `<div class="small" style="margin-top:8px">${dl.valuations.map(v => `<div>Part-ex: <b>${money(v.offered_value)}</b> for ${esc(v.description || [v.year, v.make, v.model].filter(Boolean).join(' ') || 'their home')}${v.valid_until ? `, valid until ${esc(fmtDate(v.valid_until))}` : ''}${!v.within_age_policy ? ' <span class="badge amber">Outside age policy</span>' : ''} <button class="btn ghost small" data-delval="${v.id}" aria-label="Delete valuation">${icon('x')}</button></div>`).join('')}</div>` : ''}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
       <button class="btn small" data-editdeal>Edit</button>

@@ -289,7 +289,7 @@ function guessType(ev) {
   if (/financ/.test(s)) return 'Finance meeting';
   if (ev.isOnlineMeeting || /teams/.test(s)) return 'Teams call';
   if (/call|phone/.test(s)) return 'Phone call';
-  return 'Viewing';
+  return 'Park tour';
 }
 
 function applyEvent(ev) {
