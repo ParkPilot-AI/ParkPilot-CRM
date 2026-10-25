@@ -204,7 +204,7 @@ route('POST', '/api/contacts', ({ user, body }) => {
     const ou = owner && get('users', owner);
     if (ou && ou.park_id) park = ou.park_id;
   }
-  const data = { ...body }; delete data.owner_id; delete data.park_id;
+  const data = { ...body }; delete data.owner_id; delete data.park_id; delete data.lead_no; delete data.external_id; // lead numbers are issued automatically
   const id = tx(() => {
     const id = insert('contacts', { ...data, phone_e164: U.normalisePhone(body.mobile), email: body.email ? body.email.trim().toLowerCase() : null,
       enquiry_date: body.enquiry_date || U.nowLocal(), lead_status: body.lead_status || 'New', type: body.type || 'Prospect',
@@ -246,7 +246,7 @@ route('PATCH', '/api/contacts/:id', ({ user, params, body }) => {
     const labels = ['consent_email', 'consent_sms', 'consent_post'].map(k => `${k.slice(8).toUpperCase()} ${(k in body ? body[k] : c[k]) ? 'yes' : 'no'}`).join(', ');
     insert('interactions', { contact_id: c.id, type: 'Note', at: U.nowLocal(), summary: `Marketing consent updated: ${labels}.` });
   }
-  for (const k of ['external_id', 'dup_group', 'owner_id', 'park_id', 'assigned_at']) delete patch[k]; // allocation has its own route
+  for (const k of ['external_id', 'dup_group', 'owner_id', 'park_id', 'assigned_at', 'lead_no']) delete patch[k]; // allocation has its own route; lead numbers never change
   update('contacts', c.id, patch);
   if ('email' in body || 'mobile' in body) importer.recomputeDuplicates();
   return get('contacts', c.id);

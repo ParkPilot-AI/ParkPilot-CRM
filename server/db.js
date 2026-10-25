@@ -99,6 +99,55 @@ function migrate() {
   current.exec(`UPDATE deals SET reserved_at = COALESCE(stage_changed_at, updated_at) WHERE reserved_at IS NULL
                 AND furthest_stage IN ('Finance & Paperwork','Siting & Handover','Completed')`);
   current.exec("UPDATE deals SET completed_at = COALESCE(stage_changed_at, updated_at) WHERE completed_at IS NULL AND stage = 'Completed'");
+  leadNumbers();
+}
+
+// Every lead has its own lead number. Leads imported from the previous CRM keep theirs (L000010949…);
+// leads added in the portal get the next CF number (CF000001, CF000002, …), a separate series so they
+// can never clash with numbers the old system issues. Numbers carry on from the highest ever issued,
+// so one is never reused even after a lead is deleted. The database refuses duplicates, and triggers
+// number any lead added without one, whichever way it arrives (typed in, imported, created from a search).
+const LEAD_RE = "GLOB 'CF[0-9]*'";
+function leadNumbers() {
+  const one = sql => { const r = current.exec(sql); return r.length ? r[0].values[0][0] : null; };
+  const run = (sql, args = []) => { const st = current.prepare(sql); try { st.run(args); } finally { st.free(); } };
+  current.exec(`CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
+    INSERT OR IGNORE INTO counters(name, value) VALUES('lead_no', 0);`);
+  const highest = Number(one(`SELECT COALESCE(MAX(CAST(substr(lead_no, 3) AS INTEGER)), 0) FROM contacts WHERE lead_no ${LEAD_RE}`)) || 0;
+  run("UPDATE counters SET value = MAX(value, ?) WHERE name = 'lead_no'", [highest]);
+  const hasIndex = one("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'ux_contacts_lead_no'");
+  if (!hasIndex) {
+    // Tidy up before the rule is switched on: blanks become missing, and if a number is shared the
+    // oldest record keeps it and the others are given new ones (noted on their timeline).
+    current.exec("UPDATE contacts SET lead_no = NULL WHERE lead_no IS NOT NULL AND trim(lead_no) = ''");
+    current.exec("UPDATE contacts SET lead_no = trim(lead_no) WHERE lead_no <> trim(lead_no)");
+    const shared = current.exec(`SELECT c.id, c.lead_no FROM contacts c WHERE c.lead_no IS NOT NULL
+      AND EXISTS (SELECT 1 FROM contacts o WHERE o.lead_no = c.lead_no AND o.id < c.id) ORDER BY c.id`);
+    const now = nowStamp();
+    for (const [id, old] of shared.length ? shared[0].values : []) {
+      run('UPDATE contacts SET lead_no = NULL WHERE id = ?', [id]);
+      run("INSERT INTO interactions(contact_id, type, at, summary, created_at) VALUES(?, 'Note', ?, ?, ?)",
+        [id, now.slice(0, 16), `Lead number ${old} was also used by another record, so this one was given a new number.`, now]);
+    }
+  }
+  // Number every lead that hasn't got one, oldest first.
+  const missing = current.exec('SELECT id FROM contacts WHERE lead_no IS NULL ORDER BY COALESCE(enquiry_date, created_at), id');
+  for (const [id] of missing.length ? missing[0].values : []) {
+    run("UPDATE counters SET value = value + 1 WHERE name = 'lead_no'");
+    run("UPDATE contacts SET lead_no = 'CF' || printf('%06d', (SELECT value FROM counters WHERE name = 'lead_no')) WHERE id = ?", [id]);
+  }
+  current.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_contacts_lead_no ON contacts(lead_no);
+    CREATE TRIGGER IF NOT EXISTS trg_lead_no_issue AFTER INSERT ON contacts WHEN NEW.lead_no IS NULL OR trim(NEW.lead_no) = ''
+    BEGIN
+      UPDATE counters SET value = value + 1 WHERE name = 'lead_no';
+      UPDATE contacts SET lead_no = 'CF' || printf('%06d', (SELECT value FROM counters WHERE name = 'lead_no')) WHERE id = NEW.id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_lead_no_seen_insert AFTER INSERT ON contacts WHEN NEW.lead_no ${LEAD_RE}
+    BEGIN UPDATE counters SET value = MAX(value, CAST(substr(NEW.lead_no, 3) AS INTEGER)) WHERE name = 'lead_no'; END;
+    CREATE TRIGGER IF NOT EXISTS trg_lead_no_seen_update AFTER UPDATE OF lead_no ON contacts WHEN NEW.lead_no ${LEAD_RE}
+    BEGIN UPDATE counters SET value = MAX(value, CAST(substr(NEW.lead_no, 3) AS INTEGER)) WHERE name = 'lead_no'; END;
+    CREATE TRIGGER IF NOT EXISTS trg_lead_no_keep BEFORE UPDATE OF lead_no ON contacts WHEN NEW.lead_no IS NULL OR trim(NEW.lead_no) = ''
+    BEGIN SELECT RAISE(ABORT, 'A lead number can’t be removed'); END;`);
 }
 
 function exportBytes() { return current.export(); }

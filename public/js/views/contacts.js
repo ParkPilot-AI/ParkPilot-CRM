@@ -67,7 +67,7 @@ export async function render(el, { query }) {
         ${selecting ? `<label class="m-pick">${tick(c)}</label>` : ''}
         <a class="m-main" href="#/contacts/${c.id}"><b>${esc(fullName(c))}</b>
           <span class="m-sub"><span class="status ${esc(c.lead_status)}">${esc(c.lead_status)}</span>${c.stage ? ` · ${esc(c.stage)}` : ''}${c.lead_source ? ` · ${esc(c.lead_source)}` : ''}</span>
-          <span class="m-sub faint">${c.next_appt ? `Next: ${esc(fmtWhen(c.next_appt))}` : c.enquiry_date ? `Enquired ${esc(fmtDate(c.enquiry_date))}` : ''}${c.open_tasks ? ` · ${c.open_tasks} open task${c.open_tasks > 1 ? 's' : ''}` : ''}${c.dup_group && !c.dup_dismissed ? ' · possible duplicate' : ''}</span>
+          <span class="m-sub faint">${c.lead_no ? esc(c.lead_no) + ' · ' : ''}${c.next_appt ? `Next: ${esc(fmtWhen(c.next_appt))}` : c.enquiry_date ? `Enquired ${esc(fmtDate(c.enquiry_date))}` : ''}${c.open_tasks ? ` · ${c.open_tasks} open task${c.open_tasks > 1 ? 's' : ''}` : ''}${c.dup_group && !c.dup_dismissed ? ' · possible duplicate' : ''}</span>
           ${mgr ? `<span class="m-sub">${c.owner_id ? `<span class="faint">Allocated to</span> ${esc(c.owner_id === me().id ? 'you' : c.owner_name || '')}` : '<span class="badge amber" style="padding:0 6px">Unallocated</span>'}</span>` : ''}</a>
         ${c.phone_e164 || c.mobile ? `<a class="m-call" href="tel:${esc(c.phone_e164 || c.mobile)}" aria-label="Call ${esc(fullName(c))}">${icon('phone')}</a>` : ''}
       </li>`).join('')}</ul>

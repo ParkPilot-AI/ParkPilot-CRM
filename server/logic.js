@@ -178,7 +178,7 @@ function mergeContacts(keepId, otherIds) {
       const o = get('contacts', oid);
       if (!o) continue;
       const patch = {};
-      for (const k of ['email', 'mobile', 'phone_e164', 'address', 'postcode', 'lead_source', 'budget', 'bedrooms', 'preferences', 'lead_no', 'enquiry_date']) {
+      for (const k of ['email', 'mobile', 'phone_e164', 'address', 'postcode', 'lead_source', 'budget', 'bedrooms', 'preferences', 'enquiry_date']) {
         if ((keep[k] === null || keep[k] === '') && o[k]) { patch[k] = o[k]; keep[k] = o[k]; }
       }
       if (o.enquiry_date && keep.enquiry_date && o.enquiry_date < keep.enquiry_date) patch.enquiry_date = o.enquiry_date;

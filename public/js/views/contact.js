@@ -31,7 +31,7 @@ export async function render(el, { params }) {
           ${c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : '<span class="faint">No email</span>'}
           <span class="consent" title="Marketing consent"><span class="${c.consent_email ? 'on' : ''}">Email</span><span class="${c.consent_sms ? 'on' : ''}">SMS</span><span class="${c.consent_post ? 'on' : ''}">Post</span></span>
         </div>
-        <div class="line"><span>${c.lead_source ? `Source ${esc(c.lead_source)}` : 'Source unknown'}</span><span>Enquired ${esc(c.enquiry_date ? fmtDate(c.enquiry_date) : 'unknown')}</span><span>Last contact ${esc(fmtAgo(lastTouch))}</span>${c.lead_no ? `<span class="faint">${esc(c.lead_no)}</span>` : ''}</div>
+        <div class="line"><span>${c.lead_source ? `Source ${esc(c.lead_source)}` : 'Source unknown'}</span><span>Enquired ${esc(c.enquiry_date ? fmtDate(c.enquiry_date) : 'unknown')}</span><span>Last contact ${esc(fmtAgo(lastTouch))}</span>${c.lead_no ? `<span>Lead no. <b class="lead-no">${esc(c.lead_no)}</b></span>` : ''}</div>
         ${isMgr() ? `<div class="line owner-line">${c.owner_id ? `<span>Allocated to <b>${esc(c.owner_id === me().id ? 'you' : c.owner_name || 'someone')}</b></span>` : '<span class="badge amber">Not yet allocated</span>'}${isGroupMgr() && c.park_name ? `<span>${esc(c.park_name)}</span>` : ''}<button type="button" class="linkbtn" data-a="allocate">${c.owner_id ? 'Reallocate' : 'Allocate'}</button></div>` : ''}
       </div>
       <div class="actionbar">

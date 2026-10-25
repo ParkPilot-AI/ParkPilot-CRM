@@ -81,7 +81,7 @@ function importRows(rows, { fileName = 'import', parkId = null, ownerId = null }
         if (!existing.email && email) patch.email = email;
         if (!existing.mobile && mobile) { patch.mobile = mobile; patch.phone_e164 = normalisePhone(mobile); }
         if (!existing.lead_source && source) patch.lead_source = source;
-        if (!existing.lead_no && leadNo) patch.lead_no = leadNo;
+        if (!existing.lead_no && leadNo && !findByLead.get(leadNo)) patch.lead_no = leadNo;
         if (!existing.external_id && ext) patch.external_id = ext;
         if (Object.keys(patch).length) { update('contacts', existing.id, patch); stats.updated++; }
         else stats.unchanged++;
