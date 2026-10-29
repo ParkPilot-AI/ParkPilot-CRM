@@ -5,7 +5,7 @@ const { db, tx, insert, update, get, getSettings, setSetting, DEFAULT_SETTINGS, 
 const L = require('./logic');
 const U = require('./util');
 const A = require('./access');
-const graph = require('./graph');
+const google = require('./google');
 const importer = require('./importer');
 const captain = require('./captain');
 
@@ -50,12 +50,12 @@ function parksList() { return db.prepare('SELECT id, name FROM parks ORDER BY na
 route('GET', '/api/meta', ({ user }) => ({
   hosted: true, user: A.publicUser(user), roles: A.ROLE_LABELS,
   parks: parksList(), team: A.team(user).map(m => ({ id: m.id, name: m.name || m.email, role: m.role, park_id: m.park_id, park_name: m.park_name })),
-  stages: L.STAGES, openStages: L.OPEN_STAGES, apptTypes: L.APPT_TYPES, categories: L.CATEGORIES, priorities: L.PRIORITIES,
-  leadStatuses: L.LEAD_STATUSES, contactTypes: ['Prospect', 'Owner', 'Partner'],
-  dealTypes: ['New sale', 'Upgrade with part-ex', 'Upgrade, no part-ex', 'Pre-owned sale'], paymentStatuses: L.PAYMENT_STATUSES,
-  homeStatuses: ['Available', 'Reserved', 'Sold', 'Owner-held', 'Part-ex in'], plotStatuses: ['Vacant', 'Reserved', 'Occupied'],
+  stages: L.STAGES, openStages: L.OPEN_STAGES, apptTypes: L.APPT_TYPES, remoteTypes: L.REMOTE_TYPES, tourTypes: L.TOUR_TYPES,
+  categories: L.CATEGORIES, priorities: L.PRIORITIES, leadStatuses: L.LEAD_STATUSES, contactTypes: ['Prospect', 'Customer', 'Partner'],
+  products: L.PRODUCTS, plans: L.PLANS, lostReasons: L.LOST_REASONS,
+  jobTitles: ['Owner', 'Managing Director', 'General Manager', 'Sales Manager', 'Operations Manager', 'Marketing Manager', 'Other'],
   settings: getSettings(), funnelPeriod: user.funnel_period || getSettings().funnelPeriod || '90',
-  today: U.today(), now: U.nowLocal(), outlook: graph.status(user.id)
+  today: U.today(), now: U.nowLocal(), google: google.status(user.id)
 }));
 
 /* ------------------------------------------------------------- dashboard */
@@ -85,29 +85,30 @@ route('GET', '/api/dashboard', ({ user }) => {
   const tomorrow = apptRows('a.owner_id = ? AND a.start >= ? AND a.start < ? AND a.status = ?', [me, U.addDays(day, 1) + 'T00:00', U.addDays(day, 2) + 'T00:00', 'Scheduled']);
   const funnel = L.funnel(user.funnel_period || s.funnelPeriod || '90', mine(user));
   const monthStart = day.slice(0, 8) + '01';
-  const reserved = db.prepare(`SELECT COALESCE(SUM(COALESCE(d.price,0) - COALESCE(d.part_ex_allowance,0)),0) v, COUNT(*) n FROM deals d JOIN contacts c ON c.id = d.contact_id
-                               WHERE c.owner_id = ? AND d.stage IN ('Finance & Paperwork','Siting & Handover','Completed') AND substr(d.reserved_at,1,10) >= ?`).get(me, monthStart);
+  // Won this month, as new monthly recurring revenue.
+  const won = db.prepare(`SELECT COALESCE(SUM(COALESCE(d.price,0)),0) v, COUNT(*) n FROM deals d JOIN contacts c ON c.id = d.contact_id
+                          WHERE c.owner_id = ? AND d.stage = 'Won' AND substr(d.completed_at,1,10) >= ?`).get(me, monthStart);
   const warmCut = U.addDays(day, -7);
-  const warm = db.prepare(`SELECT c.id, c.first_name, c.last_name, c.lead_source, COALESCE(c.last_contact_at, c.enquiry_date) AS last_touch, d.stage
-                           FROM contacts c JOIN deals d ON d.contact_id = c.id AND d.stage IN ('Enquiry','Appointment','Park Tour')
+  const warm = db.prepare(`SELECT c.id, c.first_name, c.last_name, c.company, c.lead_source, COALESCE(c.last_contact_at, c.enquiry_date) AS last_touch, d.stage
+                           FROM contacts c JOIN deals d ON d.contact_id = c.id AND d.stage IN ('Enquiry','Demo booked','Demo held','Proposal sent')
                            WHERE c.owner_id = ? AND c.lead_status IN ('New','Contacted','Nurture') AND substr(COALESCE(c.last_contact_at, c.enquiry_date, c.created_at),1,10) <= ?
                            AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.contact_id = c.id AND t.status = 'Open')
                            AND NOT EXISTS (SELECT 1 FROM appointments a WHERE a.contact_id = c.id AND a.status = 'Scheduled' AND a.start >= ?)
                            GROUP BY c.id ORDER BY last_touch DESC`).all(me, warmCut, day + 'T00:00');
-  const ageLimit = Number(day.slice(0, 4)) - 12;
-  const upgrades = db.prepare(`SELECT h.*, c.first_name, c.last_name, c.id AS contact_id, p.plot_number FROM homes h
-                               JOIN contacts c ON c.id = h.owner_contact_id LEFT JOIN plots p ON p.id = h.plot_id
-                               WHERE c.owner_id = ? AND h.status = 'Owner-held' AND ((h.licence_expiry IS NOT NULL AND h.licence_expiry <= ?) OR (h.year IS NOT NULL AND h.year <= ?))
-                               AND NOT EXISTS (SELECT 1 FROM deals d WHERE d.contact_id = c.id AND d.stage NOT IN ('Completed','Lost'))
-                               ORDER BY COALESCE(h.licence_expiry, '9999')`).all(me, U.addDays(day, 90), ageLimit);
+  // Proposals out, oldest first: the ones to chase.
+  const proposals = db.prepare(`SELECT d.id, d.contact_id, d.deal_type, d.plan, d.price, d.stage_changed_at, c.first_name, c.last_name, c.company FROM deals d
+                                JOIN contacts c ON c.id = d.contact_id WHERE c.owner_id = ? AND d.stage = 'Proposal sent' ORDER BY d.stage_changed_at`).all(me);
+  // New leads from Gmail and elsewhere in the last 7 days.
+  const fresh = db.prepare(`SELECT c.id, c.first_name, c.last_name, c.company, c.lead_source, c.enquiry_date FROM contacts c
+                            WHERE c.owner_id = ? AND c.lead_status = 'New' AND substr(COALESCE(c.enquiry_date, c.created_at),1,10) >= ? ORDER BY COALESCE(c.enquiry_date, c.created_at) DESC LIMIT 8`).all(me, U.addDays(day, -7));
   const review = apptRows('a.owner_id = ? AND a.needs_review = 1 AND a.status = ?', [me, 'Scheduled']);
   const unallocated = A.isManager(user) ? captain.unallocatedCount(user) : 0;
   const sc = A.contactWhere(user);
   const visibleCount = A.isManager(user) ? db.prepare(`SELECT COUNT(*) n FROM contacts c WHERE ${sc.sql}`).get(...sc.args).n : null;
   return {
     today: day, now: U.nowLocal(), contactCount: db.prepare('SELECT COUNT(*) n FROM contacts c WHERE c.owner_id = ?').get(me).n, overdue, dueToday, doneToday, upcoming, appts, tomorrow, funnel,
-    reserved, warm: { count: warm.length, top: warm.slice(0, 8) }, upgrades: { count: upgrades.length, top: upgrades.slice(0, 8) },
-    review, rollover: getState('lastRollover'), outlook: graph.status(me), unallocated, visibleCount
+    won, warm: { count: warm.length, top: warm.slice(0, 8) }, proposals: { count: proposals.length, top: proposals.slice(0, 8), mrr: proposals.reduce((s, p) => s + (p.price || 0), 0) },
+    fresh, review, rollover: getState('lastRollover'), google: google.status(me), unallocated, visibleCount
   };
 });
 
@@ -165,8 +166,8 @@ route('GET', '/api/contacts', ({ user, query }) => {
   if (q) {
     const like = `%${q.toLowerCase()}%`;
     const digits = q.replace(/\D/g, '');
-    const parts = [`lower(c.first_name || ' ' || c.last_name) LIKE ?`, 'lower(c.email) LIKE ?', 'lower(c.lead_no) LIKE ?', 'lower(c.postcode) LIKE ?'];
-    args.push(like, like, like, like);
+    const parts = [`lower(c.first_name || ' ' || c.last_name) LIKE ?`, 'lower(c.email) LIKE ?', 'lower(c.lead_no) LIKE ?', 'lower(c.postcode) LIKE ?', 'lower(c.company) LIKE ?'];
+    args.push(like, like, like, like, like);
     if (digits.length >= 4) { parts.push("replace(replace(c.mobile,' ',''),'+','') LIKE ?", 'c.phone_e164 LIKE ?'); args.push(`%${digits}%`, `%${digits.replace(/^0/, '')}%`); }
     where.push('(' + parts.join(' OR ') + ')');
   }
@@ -175,15 +176,16 @@ route('GET', '/api/contacts', ({ user, query }) => {
   if (query.source) { if (query.source === '(none)') where.push('c.lead_source IS NULL'); else { where.push('c.lead_source = ?'); args.push(query.source); } }
   if (query.dups === '1') where.push('c.dup_group IS NOT NULL AND c.dup_dismissed = 0');
   if (query.stage) { where.push('EXISTS (SELECT 1 FROM deals d WHERE d.contact_id = c.id AND d.stage = ?)'); args.push(query.stage); }
-  const sorts = { recent: 'COALESCE(c.enquiry_date, c.created_at) DESC', name: 'c.last_name COLLATE NOCASE, c.first_name COLLATE NOCASE',
+  if (query.interest) { where.push('c.interest = ?'); args.push(query.interest); }
+  const sorts = { recent: 'COALESCE(c.enquiry_date, c.created_at) DESC', name: 'c.last_name COLLATE NOCASE, c.first_name COLLATE NOCASE', company: "COALESCE(NULLIF(c.company,''), 'zzz') COLLATE NOCASE, c.last_name COLLATE NOCASE",
     touched: 'COALESCE(c.last_contact_at, c.enquiry_date) DESC' };
   const order = sorts[query.sort] || sorts.recent;
   const w = 'WHERE ' + where.join(' AND ');
   const total = db.prepare(`SELECT COUNT(*) n FROM contacts c ${w}`).get(...args).n;
   const size = Math.min(200, int(query.pageSize) || 50), page = Math.max(1, int(query.page) || 1);
-  const rows = db.prepare(`SELECT c.id, c.lead_no, c.type, c.first_name, c.last_name, c.mobile, c.phone_e164, c.email, c.lead_source, c.lead_status,
+  const rows = db.prepare(`SELECT c.id, c.lead_no, c.type, c.first_name, c.last_name, c.company, c.units, c.interest, c.mobile, c.phone_e164, c.email, c.lead_source, c.lead_status,
       c.enquiry_date, c.last_contact_at, c.dup_group, c.dup_dismissed, c.owner_id, c.park_id, ou.name AS owner_name, pk.name AS park_name,
-      (SELECT stage FROM deals d WHERE d.contact_id = c.id ORDER BY (d.stage IN ('Completed','Lost')), d.updated_at DESC LIMIT 1) AS stage,
+      (SELECT stage FROM deals d WHERE d.contact_id = c.id ORDER BY (d.stage IN ('Won','Lost')), d.updated_at DESC LIMIT 1) AS stage,
       (SELECT COUNT(*) FROM tasks t WHERE t.contact_id = c.id AND t.status = 'Open') AS open_tasks,
       (SELECT MIN(start) FROM appointments a WHERE a.contact_id = c.id AND a.status = 'Scheduled' AND a.start >= ?) AS next_appt
     FROM contacts c LEFT JOIN users ou ON ou.id = c.owner_id LEFT JOIN parks pk ON pk.id = c.park_id ${w} ORDER BY ${order} LIMIT ? OFFSET ?`).all(U.nowLocal(), ...args, size, (page - 1) * size);
@@ -196,7 +198,7 @@ route('GET', '/api/sources', ({ user }) => {
 });
 
 route('POST', '/api/contacts', ({ user, body }) => {
-  if (!(body.first_name || body.last_name || '').trim()) throw L.httpError(400, 'Enter a name');
+  if (!(body.first_name || body.last_name || body.company || '').trim()) throw L.httpError(400, 'Enter a name or the park’s name');
   // Executives' new leads are theirs. Managers can give a lead to someone in their team or leave it unallocated.
   let owner = user.id, park = A.parkFor(user, body.park_id);
   if (A.isManager(user) && 'owner_id' in body) {
@@ -211,7 +213,7 @@ route('POST', '/api/contacts', ({ user, body }) => {
       consent_date: (body.consent_email || body.consent_sms || body.consent_post) ? U.today() : null,
       park_id: park, owner_id: owner, assigned_at: owner ? U.nowStamp() : null });
     insert('interactions', { contact_id: id, type: 'Note', at: U.nowLocal(), summary: `Contact created by ${user.name || user.email}${body.lead_source ? ' (source ' + body.lead_source + ')' : ''}${owner && owner !== user.id ? `, allocated to ${userName(owner)}` : !owner ? ', not yet allocated' : ''}.` });
-    if (body.create_deal !== false && (body.type || 'Prospect') === 'Prospect') insert('deals', { contact_id: id, stage: 'Enquiry', stage_changed_at: U.nowStamp() });
+    if (body.create_deal !== false && (body.type || 'Prospect') === 'Prospect') insert('deals', { contact_id: id, stage: 'Enquiry', furthest_stage: 'Enquiry', stage_changed_at: U.nowStamp(), deal_type: L.PRODUCTS.includes(body.interest) ? body.interest : 'Not decided yet' });
     return id;
   });
   importer.recomputeDuplicates();
@@ -221,18 +223,14 @@ route('POST', '/api/contacts', ({ user, body }) => {
 route('GET', '/api/contacts/:id', ({ user, params }) => {
   const c = A.contact(user, params.id), id = c.id;
   const s = getSettings(), day = U.today();
-  const deals = db.prepare(`SELECT d.*, h.make, h.model, h.year AS home_year, h.price AS home_price, p.plot_number FROM deals d
-                            LEFT JOIN homes h ON h.id = d.home_id LEFT JOIN plots p ON p.id = d.plot_id WHERE d.contact_id = ?
-                            ORDER BY (d.stage IN ('Completed','Lost')), d.updated_at DESC`).all(id);
-  for (const d of deals) d.valuations = db.prepare(`SELECT v.*, h.make, h.model, h.year FROM valuations v LEFT JOIN homes h ON h.id = v.home_id WHERE v.deal_id = ? ORDER BY v.created_at DESC`).all(d.id);
+  const deals = db.prepare(`SELECT d.* FROM deals d WHERE d.contact_id = ? ORDER BY (d.stage IN ('Won','Lost')), d.updated_at DESC`).all(id);
   const tasks = taskRows("t.contact_id = ? AND t.status = 'Open'", [id], `COALESCE(t.due_date,'9999')`).map(t => L.decorateTask(t, s, day));
   const appts = apptRows('a.contact_id = ?', [id], 'a.start DESC');
   const timeline = db.prepare('SELECT * FROM interactions WHERE contact_id = ? ORDER BY at DESC, id DESC LIMIT 500').all(id);
-  const homes = db.prepare('SELECT h.*, p.plot_number FROM homes h LEFT JOIN plots p ON p.id = h.plot_id WHERE h.owner_contact_id = ?').all(id);
   const sc = A.contactWhere(user);
   const dups = c.dup_group && !c.dup_dismissed ? db.prepare(`SELECT c.id, c.first_name, c.last_name, c.email, c.mobile, c.lead_no, c.enquiry_date FROM contacts c WHERE c.dup_group = ? AND c.id <> ? AND ${sc.sql}`).all(c.dup_group, id, ...sc.args) : [];
   const park = c.park_id ? get('parks', c.park_id) : null;
-  return { contact: { ...c, owner_name: userName(c.owner_id), park_name: park ? park.name : null }, deals, tasks, appts, timeline, homes, dups };
+  return { contact: { ...c, owner_name: userName(c.owner_id), park_name: park ? park.name : null }, deals, tasks, appts, timeline, dups };
 });
 
 route('PATCH', '/api/contacts/:id', ({ user, params, body }) => {
@@ -327,14 +325,14 @@ route('GET', '/api/deals', ({ user, query }) => {
   const sc = leadScope(user, query);
   const out = {};
   for (const st of stages) {
-    const limit = st === 'Enquiry' || st === 'Lost' || st === 'Completed' ? 40 : 200;
-    const agg = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(COALESCE(d.price,0) - COALESCE(d.part_ex_allowance,0)),0) v FROM deals d JOIN contacts c ON c.id = d.contact_id
+    const limit = st === 'Lost' || st === 'Won' ? 40 : 200;
+    const agg = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(COALESCE(d.price,0)),0) v FROM deals d JOIN contacts c ON c.id = d.contact_id
                             WHERE d.stage = ? AND ${sc.sql}`).get(st, ...sc.args);
     out[st] = {
       count: agg.n, value: agg.v,
-      rows: db.prepare(`SELECT d.*, c.first_name, c.last_name, c.lead_source, c.type AS contact_type, c.owner_id, ou.name AS owner_name, h.make, h.model, p.plot_number,
+      rows: db.prepare(`SELECT d.*, c.first_name, c.last_name, c.company, c.units, c.lead_source, c.type AS contact_type, c.owner_id, ou.name AS owner_name,
           (SELECT MIN(start) FROM appointments a WHERE a.deal_id = d.id AND a.status = 'Scheduled' AND a.start >= ?) AS next_appt
-        FROM deals d JOIN contacts c ON c.id = d.contact_id LEFT JOIN users ou ON ou.id = c.owner_id LEFT JOIN homes h ON h.id = d.home_id LEFT JOIN plots p ON p.id = d.plot_id
+        FROM deals d JOIN contacts c ON c.id = d.contact_id LEFT JOIN users ou ON ou.id = c.owner_id
         WHERE d.stage = ? AND ${sc.sql} ORDER BY d.stage_changed_at DESC LIMIT ?`).all(U.nowLocal(), st, ...sc.args, limit)
     };
   }
@@ -342,74 +340,29 @@ route('GET', '/api/deals', ({ user, query }) => {
 });
 route('POST', '/api/deals', ({ user, body }) => {
   const c = A.contact(user, body.contact_id);
-  const id = insert('deals', { ...body, contact_id: c.id, stage: 'Enquiry', stage_changed_at: U.nowStamp(),
-    deal_type: body.deal_type || (c.type === 'Owner' ? 'Upgrade with part-ex' : 'New sale') });
-  insert('interactions', { contact_id: c.id, deal_id: id, type: 'Deal', at: U.nowLocal(), summary: `New deal opened (${body.deal_type || (c.type === 'Owner' ? 'Upgrade with part-ex' : 'New sale')}).` });
+  const product = L.PRODUCTS.includes(body.deal_type) ? body.deal_type : (L.PRODUCTS.includes(c.interest) ? c.interest : 'Not decided yet');
+  const data = { ...body }; for (const k of ['stage', 'furthest_stage', 'reserved_at', 'completed_at', 'stage_changed_at']) delete data[k];
+  const id = insert('deals', { ...data, contact_id: c.id, stage: 'Enquiry', furthest_stage: 'Enquiry', stage_changed_at: U.nowStamp(), deal_type: product });
+  insert('interactions', { contact_id: c.id, deal_id: id, type: 'Deal', at: U.nowLocal(), summary: `New deal opened (${product}${body.plan ? ' ' + body.plan : ''}).` });
   if (c.lead_status === 'Dormant' || c.lead_status === 'Lost') update('contacts', c.id, { lead_status: 'Contacted' });
   return get('deals', id);
 });
 route('PATCH', '/api/deals/:id', ({ user, params, body }) => {
   const d = A.deal(user, params.id);
-  const patch = { ...body }; delete patch.stage; delete patch.contact_id; delete patch.reserved_at; delete patch.completed_at;
-  if (patch.home_id) A.stockRow(user, 'homes', patch.home_id);
-  if (patch.plot_id) A.stockRow(user, 'plots', patch.plot_id);
+  const patch = { ...body }; for (const k of ['stage', 'furthest_stage', 'contact_id', 'reserved_at', 'completed_at', 'stage_changed_at']) delete patch[k];
   update('deals', d.id, patch);
-  if ('payment_status' in body && body.payment_status !== d.payment_status) L.paymentRecorded(d.id, body.payment_status);
   return get('deals', d.id);
 });
 route('POST', '/api/deals/:id/stage', ({ user, params, body }) => { A.deal(user, params.id); L.setDealStage(int(params.id), body.stage, { lostReason: body.lostReason }); return get('deals', int(params.id)); });
 route('DELETE', '/api/deals/:id', ({ user, params }) => { A.deal(user, params.id); db.prepare('DELETE FROM deals WHERE id = ?').run(int(params.id)); return { ok: true }; });
 
-route('POST', '/api/deals/:id/valuations', ({ user, params, body }) => {
-  const d = A.deal(user, params.id);
-  if (body.home_id) A.stockRow(user, 'homes', body.home_id);
-  const id = tx(() => {
-    const id = insert('valuations', { ...body, deal_id: d.id });
-    if (body.offered_value) update('deals', d.id, { part_ex_allowance: body.offered_value, deal_type: d.deal_type === 'New sale' ? 'Upgrade with part-ex' : d.deal_type });
-    insert('interactions', { contact_id: d.contact_id, deal_id: d.id, type: 'Deal', at: U.nowLocal(),
-      summary: `Part-ex valuation recorded${body.offered_value ? ': £' + Number(body.offered_value).toLocaleString('en-GB') : ''}${body.valid_until ? ', valid until ' + body.valid_until : ''}.` });
-    return id;
-  });
-  return db.prepare('SELECT * FROM valuations WHERE id = ?').get(id);
-});
-route('DELETE', '/api/valuations/:id', ({ user, params }) => {
-  const v = need(db.prepare('SELECT * FROM valuations WHERE id = ?').get(int(params.id)), 'Valuation');
-  A.deal(user, v.deal_id);
-  db.prepare('DELETE FROM valuations WHERE id = ?').run(v.id);
-  return { ok: true };
-});
-
-/* ----------------------------------------------------------- homes/plots */
-
-route('GET', '/api/homes', ({ user, query }) => {
-  const sc = A.parkWhere(user, 'h');
-  const extra = query.park && A.isGroup(user) ? ' AND h.park_id = ' + int(query.park) : '';
-  return db.prepare(`SELECT h.*, p.plot_number, c.first_name, c.last_name, pk.name AS park_name FROM homes h
-    LEFT JOIN plots p ON p.id = h.plot_id LEFT JOIN contacts c ON c.id = h.owner_contact_id LEFT JOIN parks pk ON pk.id = h.park_id
-    WHERE ${sc.sql}${extra} ORDER BY h.status, h.make, h.model`).all(...sc.args);
-});
-route('POST', '/api/homes', ({ user, body }) => get('homes', insert('homes', { ...body, park_id: A.parkFor(user, body.park_id) })));
-route('PATCH', '/api/homes/:id', ({ user, params, body }) => { A.stockRow(user, 'homes', params.id); const b = { ...body }; if (!A.isGroup(user)) delete b.park_id; update('homes', int(params.id), b); return get('homes', int(params.id)); });
-route('DELETE', '/api/homes/:id', ({ user, params }) => { A.stockRow(user, 'homes', params.id); db.prepare('DELETE FROM homes WHERE id = ?').run(int(params.id)); return { ok: true }; });
-route('GET', '/api/plots', ({ user, query }) => {
-  const sc = A.parkWhere(user, 'p');
-  const extra = query.park && A.isGroup(user) ? ' AND p.park_id = ' + int(query.park) : '';
-  return db.prepare(`SELECT p.*, pk.name AS park_name, (SELECT h.make || ' ' || COALESCE(h.model,'') FROM homes h WHERE h.plot_id = p.id LIMIT 1) AS home
-    FROM plots p LEFT JOIN parks pk ON pk.id = p.park_id WHERE ${sc.sql}${extra} ORDER BY pk.name, CAST(p.plot_number AS INTEGER), p.plot_number`).all(...sc.args);
-});
-route('POST', '/api/plots', ({ user, body }) => { if (!body.plot_number) throw L.httpError(400, 'Enter a plot number'); return get('plots', insert('plots', { ...body, park_id: A.parkFor(user, body.park_id) })); });
-route('PATCH', '/api/plots/:id', ({ user, params, body }) => { A.stockRow(user, 'plots', params.id); const b = { ...body }; if (!A.isGroup(user)) delete b.park_id; update('plots', int(params.id), b); return get('plots', int(params.id)); });
-route('DELETE', '/api/plots/:id', ({ user, params }) => { A.stockRow(user, 'plots', params.id); db.prepare('DELETE FROM plots WHERE id = ?').run(int(params.id)); return { ok: true }; });
-
 /* ---------------------------------------------------------- appointments */
 
 function apptRows(where, args, order = 'a.start') {
-  return db.prepare(`SELECT a.*, c.first_name, c.last_name, c.mobile, c.email AS contact_email, d.stage AS deal_stage, d.price AS deal_price,
-      h.make, h.model, h.year AS home_year, ou.name AS owner_name,
-      (SELECT summary FROM interactions i WHERE i.contact_id = a.contact_id AND i.type IN ('Note','Call','Meeting') ORDER BY i.at DESC LIMIT 1) AS last_note,
-      (SELECT offered_value FROM valuations v WHERE v.deal_id = a.deal_id ORDER BY v.created_at DESC LIMIT 1) AS px_value,
-      c.budget
-    FROM appointments a LEFT JOIN contacts c ON c.id = a.contact_id LEFT JOIN deals d ON d.id = a.deal_id LEFT JOIN homes h ON h.id = a.home_id
+  return db.prepare(`SELECT a.*, c.first_name, c.last_name, c.mobile, c.email AS contact_email, c.company, c.units, c.current_systems,
+      d.stage AS deal_stage, d.price AS deal_price, d.deal_type AS deal_product, d.plan AS deal_plan, ou.name AS owner_name,
+      (SELECT summary FROM interactions i WHERE i.contact_id = a.contact_id AND i.type IN ('Note','Call','Meeting','Email') ORDER BY i.at DESC LIMIT 1) AS last_note
+    FROM appointments a LEFT JOIN contacts c ON c.id = a.contact_id LEFT JOIN deals d ON d.id = a.deal_id
     LEFT JOIN users ou ON ou.id = a.owner_id
     WHERE ${where} ORDER BY ${order}`).all(...args);
 }
@@ -418,15 +371,12 @@ route('GET', '/api/appointments', ({ user, query }) => {
   const who = whose(user, query.user);
   const from = (query.from || U.today()) + 'T00:00', to = U.addDays(query.to || U.addDays(U.today(), 7), 1) + 'T00:00';
   const appts = apptRows("a.owner_id = ? AND a.end > ? AND a.start < ? AND (a.status <> 'Cancelled' OR ? = '1')", [who, from, to, query.cancelled || '0']);
-  const outlook = query.outlook === '1' ? db.prepare(`SELECT id, subject, start, end, is_all_day, show_as FROM outlook_events
-      WHERE user_id = ? AND appointment_id IS NULL AND COALESCE(is_cancelled,0) = 0 AND end > ? AND start < ? ORDER BY start`).all(who, from, to) : [];
-  return { appts, outlook, user: who, outlookConnected: graph.isConnected(who) };
+  return { appts, user: who, googleConnected: google.isConnected(who) };
 });
 route('GET', '/api/appointments/:id', ({ user, params }) => { A.appointment(user, params.id); return apptRows('a.id = ?', [int(params.id)])[0]; });
 route('POST', '/api/appointments', ({ user, body }) => {
   const c = body.contact_id ? A.contact(user, body.contact_id) : null;
   if (body.deal_id) A.deal(user, body.deal_id);
-  if (body.home_id) A.stockRow(user, 'homes', body.home_id);
   const owner = A.ownerFor(user, body.owner_id, user.id);
   void c;
   return apptRows('a.id = ?', [L.createAppointment({ ...body, owner_id: owner })])[0];
@@ -435,14 +385,12 @@ route('PATCH', '/api/appointments/:id', ({ user, params, body }) => {
   A.appointment(user, params.id);
   if (body.contact_id) A.contact(user, body.contact_id);
   if (body.deal_id) A.deal(user, body.deal_id);
-  if (body.home_id) A.stockRow(user, 'homes', body.home_id);
   L.updateAppointment(int(params.id), body);
   return apptRows('a.id = ?', [int(params.id)])[0];
 });
 route('POST', '/api/appointments/:id/cancel', ({ user, params, body }) => { A.appointment(user, params.id); L.cancelAppointment(int(params.id), { message: body.message }); return { ok: true }; });
 route('POST', '/api/appointments/:id/outcome', ({ user, params, body }) => {
   A.appointment(user, params.id);
-  if (body.home_id) A.stockRow(user, 'homes', body.home_id);
   L.recordOutcome(int(params.id), body); return { ok: true };
 });
 route('POST', '/api/appointments/:id/confirm', ({ user, params }) => { A.appointment(user, params.id); update('appointments', int(params.id), { needs_review: 0, conflict_note: null }, { touch: false }); return { ok: true }; });
@@ -456,25 +404,25 @@ route('GET', '/api/slots', ({ user, query }) => {
 
 route('GET', '/api/search', ({ user, query }) => {
   const q = (query.q || '').trim();
-  if (q.length < 2) return { contacts: [], plots: [] };
+  if (q.length < 2) return { contacts: [] };
   const like = `%${q.toLowerCase()}%`, digits = q.replace(/\D/g, '');
-  const sc = A.contactWhere(user), ps = A.parkWhere(user, 'p');
-  const contacts = db.prepare(`SELECT c.id, c.first_name, c.last_name, c.mobile, c.email, c.lead_no, c.type, c.lead_status, c.owner_id, ou.name AS owner_name FROM contacts c
+  const sc = A.contactWhere(user);
+  const contacts = db.prepare(`SELECT c.id, c.first_name, c.last_name, c.company, c.mobile, c.email, c.lead_no, c.type, c.lead_status, c.owner_id, ou.name AS owner_name FROM contacts c
     LEFT JOIN users ou ON ou.id = c.owner_id
-    WHERE (lower(c.first_name || ' ' || c.last_name) LIKE ? OR lower(c.email) LIKE ? OR lower(c.lead_no) LIKE ?
+    WHERE (lower(c.first_name || ' ' || c.last_name) LIKE ? OR lower(c.email) LIKE ? OR lower(c.lead_no) LIKE ? OR lower(c.company) LIKE ?
     ${digits.length >= 4 ? "OR replace(replace(c.mobile,' ',''),'+','') LIKE ? OR c.phone_e164 LIKE ?" : ''}) AND ${sc.sql}
-    ORDER BY (lower(c.first_name || ' ' || c.last_name) LIKE ?) DESC, COALESCE(c.last_contact_at, c.enquiry_date) DESC LIMIT 12`)
-    .all(like, like, like, ...(digits.length >= 4 ? [`%${digits}%`, `%${digits.replace(/^0/, '')}%`] : []), ...sc.args, q.toLowerCase() + '%');
-  const plots = db.prepare(`SELECT p.id, p.plot_number, p.area, p.status FROM plots p WHERE (lower(p.plot_number) LIKE ? OR lower('plot ' || p.plot_number) LIKE ?) AND ${ps.sql} LIMIT 5`).all(like, like, ...ps.args);
-  return { contacts, plots };
+    ORDER BY (lower(c.first_name || ' ' || c.last_name) LIKE ? OR lower(c.company) LIKE ?) DESC, COALESCE(c.last_contact_at, c.enquiry_date) DESC LIMIT 12`)
+    .all(like, like, like, like, ...(digits.length >= 4 ? [`%${digits}%`, `%${digits.replace(/^0/, '')}%`] : []), ...sc.args, q.toLowerCase() + '%', q.toLowerCase() + '%');
+  return { contacts };
 });
 
 /* -------------------------------------------------------------- settings */
 
-route('GET', '/api/settings', ({ user }) => ({ settings: getSettings(), outlook: graph.status(user.id), user: A.publicUser(user), hosted: true }));
+route('GET', '/api/settings', ({ user }) => ({ settings: getSettings(), google: google.status(user.id), user: A.publicUser(user), hosted: true }));
 route('PUT', '/api/settings', ({ user, body }) => {
   A.requireManager(user);
   for (const k of Object.keys(DEFAULT_SETTINGS)) if (k in body) setSetting(k, body[k]);
+  if ('gmailLabel' in body || 'gmailDoneLabel' in body) db.prepare("DELETE FROM sync_state WHERE key LIKE 'gLabels:%'").run(); // looked up again next time
   return { settings: getSettings() };
 });
 
@@ -482,8 +430,9 @@ route('POST', '/api/import', ({ user, raw, headers }) => {
   A.requireManager(user);
   if (!raw || !raw.length) throw L.httpError(400, 'No file received');
   const name = decodeURIComponent(headers['x-filename'] || 'import.xlsx');
-  // Imported leads land unallocated at the chosen park (a manager's own park), ready to hand out.
-  return importer.importFile(raw, name, { parkId: A.parkFor(user, headers['x-park']) });
+  // With one person on the team, imported leads are theirs; otherwise they land unallocated, ready to hand out.
+  const solo = A.team(user).length <= 1;
+  return importer.importFile(raw, name, { parkId: A.parkFor(user, headers['x-park']), ownerId: solo ? user.id : null });
 });
 
 route('GET', '/api/jobs', ({ user }) => { A.requireManager(user); return db.prepare('SELECT * FROM job_log ORDER BY id DESC LIMIT 30').all(); });
@@ -491,20 +440,22 @@ route('GET', '/api/jobs', ({ user }) => { A.requireManager(user); return db.prep
 route('GET', '/api/export/contacts.csv', ({ user, query }) => {
   A.requireManager(user);
   const sc = leadScope(user, query);
-  const rows = db.prepare(`SELECT c.lead_no, c.type, c.first_name, c.last_name, c.mobile, c.email, c.postcode, c.lead_source, c.lead_status,
-    c.enquiry_date, c.last_contact_at, c.consent_email, c.consent_sms, c.consent_post, pk.name AS park, ou.name AS owner,
-    (SELECT stage FROM deals d WHERE d.contact_id = c.id ORDER BY d.updated_at DESC LIMIT 1) AS stage
-    FROM contacts c LEFT JOIN parks pk ON pk.id = c.park_id LEFT JOIN users ou ON ou.id = c.owner_id WHERE ${sc.sql} ORDER BY c.last_name, c.first_name`).all(...sc.args);
-  const cols = ['lead_no', 'type', 'first_name', 'last_name', 'mobile', 'email', 'postcode', 'lead_source', 'lead_status', 'stage', 'park', 'owner', 'enquiry_date', 'last_contact_at', 'consent_email', 'consent_sms', 'consent_post'];
+  const rows = db.prepare(`SELECT c.lead_no, c.type, c.first_name, c.last_name, c.job_title, c.company, c.units, c.sites, c.region, c.website, c.interest, c.current_systems,
+    c.mobile, c.email, c.postcode, c.lead_source, c.lead_status, c.enquiry_date, c.last_contact_at, c.consent_email, c.consent_sms, c.consent_post, ou.name AS owner,
+    (SELECT stage FROM deals d WHERE d.contact_id = c.id ORDER BY d.updated_at DESC LIMIT 1) AS stage,
+    (SELECT price FROM deals d WHERE d.contact_id = c.id ORDER BY d.updated_at DESC LIMIT 1) AS monthly_value
+    FROM contacts c LEFT JOIN users ou ON ou.id = c.owner_id WHERE ${sc.sql} ORDER BY c.company, c.last_name, c.first_name`).all(...sc.args);
+  const cols = ['lead_no', 'type', 'first_name', 'last_name', 'job_title', 'company', 'units', 'sites', 'region', 'website', 'interest', 'current_systems', 'mobile', 'email', 'postcode',
+    'lead_source', 'lead_status', 'stage', 'monthly_value', 'owner', 'enquiry_date', 'last_contact_at', 'consent_email', 'consent_sms', 'consent_post'];
   const esc = v => v === null || v === undefined ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
   const csv = '﻿' + [cols.join(','), ...rows.map(r => cols.map(k => esc(r[k])).join(','))].join('\r\n');
-  return raw(200, csv, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="coastfields-contacts-${U.today()}.csv"` });
+  return raw(200, csv, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="parkpilot-leads-${U.today()}.csv"` });
 });
 
 route('GET', '/api/backup', ({ user }) => {
   A.requireGroup(user);
   return raw(200, Buffer.from(exportBytes()), { 'Content-Type': 'application/octet-stream',
-    'Content-Disposition': `attachment; filename="coastfields-${U.nowStamp().replace(/[:T]/g, '-')}.db"` });
+    'Content-Disposition': `attachment; filename="parkpilot-crm-${U.nowStamp().replace(/[:T]/g, '-')}.db"` });
 });
 
 /* ------------------------------------------------------------ team/parks */
@@ -515,7 +466,7 @@ function teamView(user) {
     ...m, roleLabel: A.ROLE_LABELS[m.role],
     leads: db.prepare("SELECT COUNT(*) n FROM contacts WHERE owner_id = ? AND lead_status NOT IN ('Lost','Customer','Dormant')").get(m.id).n,
     overdue: db.prepare("SELECT COUNT(*) n FROM tasks WHERE owner_id = ? AND status = 'Open' AND due_date < ?").get(m.id, day).n,
-    outlook: graph.isConnected(m.id),
+    google: google.isConnected(m.id),
     canEdit: canManage(user, m), isMe: m.id === user.id
   }));
 }
@@ -535,11 +486,11 @@ route('GET', '/api/team', ({ user }) => {
 function checkPerson(user, body, existing) {
   const role = body.role || (existing && existing.role) || 'exec';
   if (!A.ROLES.includes(role)) throw L.httpError(400, 'Choose a role');
-  if (!A.isGroup(user) && role !== 'exec') throw L.httpError(403, 'Sales managers can add sales executives. Ask a group sales manager to add managers.');
+  if (!A.isGroup(user) && role !== 'exec') throw L.httpError(403, 'Sales managers can add sales executives. Ask an admin to add managers.');
   let park = 'park_id' in body ? int(body.park_id) : existing ? existing.park_id : null;
   if (!A.isGroup(user)) park = user.park_id;
-  if (role !== 'group' && !park) throw L.httpError(400, 'Choose which park they work at');
-  if (park && !get('parks', park)) throw L.httpError(400, 'Choose which park they work at');
+  if (role !== 'group' && !park) throw L.httpError(400, 'Choose which team they work in');
+  if (park && !get('parks', park)) throw L.httpError(400, 'Choose which team they work in');
   return { role, park_id: park };
 }
 
@@ -551,7 +502,7 @@ route('POST', '/api/users', ({ user, body }) => {
   const { role, park_id } = checkPerson(user, body, null);
   if (existing) {
     if (existing.active) throw L.httpError(400, `${email} is already on the team`);
-    if (!canManage(user, { ...existing, park_id: existing.park_id || park_id })) throw L.httpError(403, 'Ask a group sales manager to restore this person.');
+    if (!canManage(user, { ...existing, park_id: existing.park_id || park_id })) throw L.httpError(403, 'Ask an admin to restore this person.');
     update('users', existing.id, { active: 1, role, park_id, name: (body.name || '').trim() || existing.name });
     return get('users', existing.id);
   }
@@ -568,7 +519,7 @@ route('PATCH', '/api/users/:id', ({ user, params, body }) => {
   if ('name' in body) patch.name = String(body.name || '').trim() || t.email;
   if ('role' in body || 'park_id' in body) Object.assign(patch, checkPerson(user, body, t));
   if (t.id === user.id && patch.role && patch.role !== t.role) throw L.httpError(400, 'You can’t change your own role.');
-  if (A.owners().includes(t.email.toLowerCase()) && patch.role && patch.role !== 'group') throw L.httpError(400, 'This person is a portal owner (OWNER_EMAILS) and is always a group sales manager.');
+  if (A.owners().includes(t.email.toLowerCase()) && patch.role && patch.role !== 'group') throw L.httpError(400, 'This person is a CRM owner (OWNER_EMAILS) and is always an admin.');
   update('users', t.id, patch);
   return get('users', t.id);
 });
@@ -579,7 +530,7 @@ route('POST', '/api/users/:id/remove', ({ user, params, body }) => {
   const t = need(get('users', int(params.id)), 'Person');
   if (!canManage(user, t)) throw L.httpError(403, 'You can’t remove this person.');
   if (t.id === user.id) throw L.httpError(400, 'You can’t remove yourself.');
-  if (A.owners().includes(t.email.toLowerCase())) throw L.httpError(400, 'This person is a portal owner (OWNER_EMAILS). Remove them there first.');
+  if (A.owners().includes(t.email.toLowerCase())) throw L.httpError(400, 'This person is a CRM owner (OWNER_EMAILS). Remove them there first.');
   const to = body.transfer_to ? A.ownerFor(user, body.transfer_to) : null;
   if (to === t.id) throw L.httpError(400, 'Choose someone else to take their leads.');
   const leads = db.prepare('SELECT * FROM contacts WHERE owner_id = ?').all(t.id);
@@ -607,26 +558,26 @@ route('PATCH', '/api/parks/:id', ({ user, params, body }) => {
   return get('parks', p.id);
 });
 
-/* --------------------------------------------------------------- outlook */
+/* ---------------------------------------------------------------- google */
 
-route('GET', '/api/outlook/status', ({ user }) => graph.status(user.id));
-route('POST', '/api/outlook/sync', ({ user }) => graph.as(user.id, async () => ({ result: await graph.syncNow({ budgetMs: 6e3 }), status: graph.status() })));
-route('POST', '/api/outlook/disconnect', ({ user }) => graph.as(user.id, async () => { await graph.disconnect(); return graph.status(); }));
-route('GET', '/api/auth/start', ({ user }) => graph.withUser(user.id, () => raw(302, '', { Location: graph.startAuth() })));
-route('GET', '/api/auth/callback', ({ user, query }) => graph.as(user.id, async () => {
-  try { await graph.finishAuth(query); return raw(302, '', { Location: '/#/settings?connected=1' }); }
-  catch (e) { return raw(200, page('Could not connect to Outlook', e.message), { 'Content-Type': 'text/html; charset=utf-8' }); }
+route('GET', '/api/google/status', ({ user }) => google.status(user.id));
+route('POST', '/api/google/sync', ({ user }) => google.as(user.id, async () => ({ result: await google.syncNow({ budgetMs: 8e3 }), status: google.status() })));
+route('POST', '/api/google/disconnect', ({ user }) => google.as(user.id, async () => { await google.disconnect(); return google.status(); }));
+route('GET', '/api/google/start', ({ user }) => google.withUser(user.id, () => raw(302, '', { Location: google.startAuth() })));
+route('GET', '/api/google/callback', ({ user, query }) => google.as(user.id, async () => {
+  try { await google.finishAuth(query); return raw(302, '', { Location: '/#/settings?connected=1' }); }
+  catch (e) { return raw(200, page('Could not connect Google', e.message), { 'Content-Type': 'text/html; charset=utf-8' }); }
 }));
+route('POST', '/api/google/retry', ({ user }) => google.withUser(user.id, () => { google.retryErrors(); return google.status(); }));
 route('GET', '/api/me', ({ user }) => ({ user: A.publicUser(user), contacts: db.prepare('SELECT COUNT(*) n FROM contacts WHERE owner_id = ?').get(user.id).n }));
-route('POST', '/api/outlook/retry', ({ user }) => graph.withUser(user.id, () => { graph.retryErrors(); return graph.status(); }));
 
 function raw(status, body, headers = {}) { return { __raw: true, status, body, headers }; }
 function page(title, message) {
   const e = t => String(t || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  return `<!doctype html><meta charset="utf-8"><title>${e(title)}</title><meta name="viewport" content="width=device-width,initial-scale=1">
-  <body style="font-family:system-ui,sans-serif;background:#eef3f6;display:grid;place-items:center;min-height:100vh;margin:0">
-  <div style="background:#fff;padding:32px 36px;border-radius:14px;max-width:460px"><img src="/img/logo.png" alt="Coastfields" style="height:36px">
-  <h2 style="margin:20px 0 8px;color:#b42318">${e(title)}</h2><p style="color:#555;line-height:1.5">${e(message)}</p><p><a href="/#/settings" style="color:#2f7fbf">Back to the portal</a></p></div></body>`;
+  return `<!doctype html><html lang="en-GB"><meta charset="utf-8"><title>${e(title)} – ParkPilot CRM</title><meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" type="image/png" href="/img/favicon.png"><link rel="stylesheet" href="/css/page.css">
+  <body class="plain"><div class="box"><span class="wordmark"><img src="/img/mark.png" alt=""><span class="wm">ParkPilot</span><span class="crm">CRM</span></span>
+  <h2 class="err">${e(title)}</h2><p>${e(message)}</p><p><a class="btn" href="/#/settings">Back to Settings</a></p></div></body></html>`;
 }
 
 module.exports = { match, fullName, raw, page };

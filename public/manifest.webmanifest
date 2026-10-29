@@ -1,13 +1,13 @@
 {
-  "name": "Coastfields Customer Portal",
-  "short_name": "Coastfields",
-  "description": "Sales CRM for Coastfields holiday home sales: today's tasks, diary, contacts and the sales funnel.",
+  "name": "ParkPilot CRM",
+  "short_name": "ParkPilot CRM",
+  "description": "ParkPilot's sales CRM: today's tasks, leads from Gmail, demos and the sales pipeline.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#eef3f6",
-  "theme_color": "#ffffff",
+  "background_color": "#FAF6EE",
+  "theme_color": "#FAF6EE",
   "lang": "en-GB",
   "icons": [
     { "src": "/img/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
@@ -16,7 +16,7 @@
   ],
   "shortcuts": [
     { "name": "Today", "url": "/#/", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] },
-    { "name": "Diary", "url": "/#/diary", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] },
-    { "name": "Contacts", "url": "/#/contacts", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] }
+    { "name": "Leads", "url": "/#/contacts", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Pipeline", "url": "/#/funnel", "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }] }
   ]
 }

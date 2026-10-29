@@ -5,7 +5,6 @@ import { diaryCard, bindDiary } from './parts.js';
 let mode = 'week';      // desktop: day, week or month
 let phoneMode = 'agenda'; // phones: day or agenda (the next two weeks as a list)
 let anchor = null;
-let showOutlook = true;
 let who = null; // managers can look at someone else's diary (null = their own)
 const PX = 48 / 60; // pixels per minute
 const MO = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -28,7 +27,7 @@ export async function render(el, { query }) {
   else if (view === 'week') { from = mondayOf(anchor); to = addDays(from, 6); }
   else { const p = parts(anchor); const first = `${p.y}-${String(p.m).padStart(2, '0')}-01`; from = mondayOf(first); to = addDays(from, 41); }
   const [data, tasks] = await Promise.all([
-    get(`/api/appointments?from=${from}&to=${to}&outlook=${showOutlook ? 1 : 0}&cancelled=1${forParam}`),
+    get(`/api/appointments?from=${from}&to=${to}&cancelled=1${forParam}`),
     get('/api/tasks?scope=open' + forParam)
   ]);
   const days = []; for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);
@@ -44,12 +43,12 @@ export async function render(el, { query }) {
       <div class="seg"><button type="button" data-nav="-1" aria-label="Previous">‹</button><button type="button" data-nav="0">Today</button><button type="button" data-nav="1" aria-label="Next">›</button></div>
       <button class="btn primary desk-only" data-book>+ Appointment</button>
     </div>
-    ${isMgr() ? `<div class="toolbar diary-for"><label class="small muted">Diary for <select data-who aria-label="Whose diary">${teamOptions(who || me().id)}</select></label>
-      ${who && who !== me().id ? `<span class="faint small">${data.outlookConnected ? 'Their Outlook is connected.' : 'Their Outlook isn’t connected, so only appointments booked here show.'}</span>` : ''}</div>` : ''}
+    ${isMgr() && (state.meta.team || []).length > 1 ? `<div class="toolbar diary-for"><label class="small muted">Diary for <select data-who aria-label="Whose diary">${teamOptions(who || me().id)}</select></label>
+      ${who && who !== me().id ? `<span class="faint small">${data.googleConnected ? 'Their Google Calendar is connected.' : 'Their Google Calendar isn’t connected.'}</span>` : ''}</div>` : ''}
     <div class="toolbar">
-      <div class="legend">${state.meta.apptTypes.map(t => `<span class="${typeClass(t)}"><i></i>${esc(t)}</span>`).join('')}${showOutlook ? '<span><i style="background:#e6ebef;border:1px dashed #b7c4cf"></i>Other Outlook events</span>' : ''}</div>
+      <div class="legend">${state.meta.apptTypes.map(t => `<span class="${typeClass(t)}"><i></i>${esc(t)}</span>`).join('')}</div>
       <div class="spacer"></div>
-      <label class="check small"><input type="checkbox" data-outlook ${showOutlook ? 'checked' : ''}> Show everything in Outlook</label>
+      ${state.meta.google && state.meta.google.connected ? '<span class="faint small">Appointments are copied to your Google Calendar</span>' : ''}
     </div>
     <div class="cal-wrap">
       <div class="${view === 'agenda' ? 'agenda' : 'cal'}" id="cal">${view === 'agenda' ? agendaList(days, data) : view === 'month' ? monthGrid(days, data, anchor) : weekGrid(days, data, s)}</div>
@@ -77,7 +76,7 @@ export async function render(el, { query }) {
     const t = tasks.find(x => String(x.id) === String(taskId));
     if (!t) return;
     book({ start, contact: t.contact_id ? { id: t.contact_id, first_name: t.first_name, last_name: t.last_name, email: t.contact_email } : null,
-      type: t.category === 'Call' ? 'Phone call' : 'Park tour', title: t.title, notes: t.notes || '' });
+      type: t.category === 'Call' ? 'Follow-up call' : 'Demo', title: t.title, notes: t.notes || '' });
   };
   el.querySelectorAll('[data-booktask]').forEach(b => b.addEventListener('click', () => bookTask(b.dataset.booktask)));
   if (view === 'agenda') {
@@ -85,7 +84,6 @@ export async function render(el, { query }) {
     el.querySelectorAll('[data-dayadd]').forEach(b => b.addEventListener('click', () => book({ start: `${b.dataset.dayadd}T10:00` })));
     return;
   }
-  el.querySelector('[data-outlook]').onchange = e => { showOutlook = e.target.checked; render(el, { query: {} }); };
   el.querySelectorAll('[data-ev]').forEach(x => x.addEventListener('click', e => { e.stopPropagation(); apptDialog(x.dataset.ev); }));
 
   if (view === 'month') {
@@ -129,7 +127,7 @@ export async function render(el, { query }) {
         const a = data.appts.find(x => String(x.id) === apptId);
         if (!a || a.start === start) return;
         await patch(`/api/appointments/${apptId}`, { start });
-        toast(`Moved to ${fmtDay(start)} ${hhmm(m)}${state.meta.outlook.connected ? '; Outlook and the invite updated' : ''}`);
+        toast(`Moved to ${fmtDay(start)} ${hhmm(m)}${state.meta.google && state.meta.google.connected ? '; Google Calendar and the invite updated' : ''}`);
         changed();
       } else if (taskId) bookTask(taskId, start);
     });
@@ -152,10 +150,10 @@ function agendaList(days, data) {
     return `<section class="ag-day"><div class="ag-head"><h3>${esc(d === td ? 'Today' : fmtDay(d))}<span class="faint"> ${esc(d === td || fmtDay(d) === 'Tomorrow' ? fmtDate(d) : '')}</span></h3>
       <button type="button" class="btn ghost small" data-dayadd="${d}" aria-label="Book on ${esc(fmtDate(d))}">+ Book</button></div>
       ${appts.map(a => diaryCard(a)).join('')}
-      ${other.map(o => `<div class="ag-busy">${o.is_all_day ? 'All day' : `${esc(fmtTime(o.start))} – ${esc(fmtTime(o.end))}`} · ${esc(o.subject || 'Busy')} <span class="faint">(Outlook)</span></div>`).join('')}
+      ${other.map(o => `<div class="ag-busy">${o.is_all_day ? 'All day' : `${esc(fmtTime(o.start))} – ${esc(fmtTime(o.end))}`} · ${esc(o.subject || 'Busy')}</div>`).join('')}
       ${!appts.length && !other.length ? '<div class="faint small" style="padding:4px 2px 10px">Nothing booked today.</div>' : ''}</section>`;
   }).join('');
-  return out || '<div class="empty"><strong>Nothing booked in these two weeks</strong>Use + to book a park tour.</div>';
+  return out || '<div class="empty"><strong>Nothing booked in these two weeks</strong>Use + to book a demo.</div>';
 }
 
 function layoutDay(items) {

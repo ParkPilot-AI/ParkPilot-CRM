@@ -64,10 +64,10 @@ export function bindTasks(container, tasks) {
 export function diaryCard(a, { showDate = false } = {}) {
   const past = a.end <= nowLocal();
   const prep = [
+    a.company ? ['Park', esc(a.company) + (a.units ? ` · ${esc(a.units)} units` : '')] : null,
     a.deal_stage ? ['Deal stage', esc(a.deal_stage)] : null,
-    a.budget ? ['Budget', money(a.budget)] : null,
-    a.make ? ['Home', esc([a.home_year, a.make, a.model].filter(Boolean).join(' '))] : null,
-    a.px_value ? ['Part-ex', money(a.px_value)] : null,
+    a.deal_product && a.deal_product !== 'Not decided yet' ? ['Interested in', esc(a.deal_product + (a.deal_plan ? ' ' + a.deal_plan : '')) + (a.deal_price ? ` · ${money(a.deal_price)}/month` : '')] : null,
+    a.current_systems ? ['Current systems', esc(a.current_systems)] : null,
     a.last_note ? ['Last note', esc(a.last_note)] : null,
     a.notes ? ['Notes', esc(a.notes)] : null
   ].filter(Boolean);
@@ -75,12 +75,12 @@ export function diaryCard(a, { showDate = false } = {}) {
     <div class="row"><div>
       <div class="when">${showDate ? esc(fmtDay(a.start)) + ', ' : ''}${esc(fmtTime(a.start))} – ${esc(fmtTime(a.end))}
         ${a.status === 'Completed' ? '<span class="badge green">Done</span>' : ''}${a.status === 'Cancelled' ? '<span class="badge red">Cancelled</span>' : ''}
-        ${a.needs_review ? '<span class="badge amber">Check link</span>' : ''}${a.sync_status === 'Error' ? `<span class="badge red" title="${esc(syncLabel(a))}">Not in Outlook</span>` : ''}</div>
-      <div class="what">${esc(a.type)}${a.contact_id ? ` – <a href="#/contacts/${a.contact_id}">${esc(fullName(a))}</a>` : a.title && a.title !== a.type ? ' – ' + esc(a.title) : ''}</div>
+        ${a.needs_review ? '<span class="badge amber">Check link</span>' : ''}${a.sync_status === 'Error' ? `<span class="badge red" title="${esc(syncLabel(a))}">Not in Google Calendar</span>` : ''}</div>
+      <div class="what">${esc(a.type)}${a.contact_id ? ` – <a href="#/contacts/${a.contact_id}">${esc(fullName(a))}</a>${a.company && (a.first_name || a.last_name) ? ` <span class="faint small">${esc(a.company)}</span>` : ''}` : a.title && a.title !== a.type ? ' – ' + esc(a.title) : ''}</div>
       <div class="where">${esc(a.location || '')}${a.outcome ? ` · ${esc(a.outcome)}` : ''}</div>
     </div>
     <div style="display:flex;gap:6px;flex-direction:column;align-items:flex-end">
-      ${a.teams_url && !past ? `<a class="btn small primary" href="${esc(a.teams_url)}" target="_blank" rel="noopener">Join</a>` : ''}
+      ${a.teams_url && !past ? `<a class="btn small primary" href="${esc(a.teams_url)}" target="_blank" rel="noopener">Join Meet</a>` : ''}
       ${past && a.status === 'Scheduled' ? `<button class="btn small" data-outcome="${a.id}">Record outcome</button>` : `<button class="btn small ghost" data-open="${a.id}">Open</button>`}
     </div></div>
     ${prep.length ? `<details><summary>Preparation</summary><dl class="prep">${prep.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></details>` : ''}

@@ -1,14 +1,14 @@
 'use strict';
 // Persistence for the portal's SQLite database file.
-//  - On Netlify: one entry in a Netlify Blobs store ("coastfields"), saved with ETag checks so
+//  - On Netlify: one entry in a Netlify Blobs store ("parkpilot-crm"), saved with ETag checks so
 //    two simultaneous saves can never overwrite each other.
-//  - Locally (COASTFIELDS_DATA set, or not on Netlify): a file, for development and tests.
+//  - Locally (PARKPILOT_DATA set, or not on Netlify): a file, for development and tests.
 // A copy is kept once a day under backups/ (the last 60 are retained).
 const fs = require('node:fs');
 const path = require('node:path');
 
-const STORE_NAME = process.env.COASTFIELDS_STORE_NAME || 'coastfields';
-const DB_KEY = 'coastfields.db';
+const STORE_NAME = process.env.PARKPILOT_STORE_NAME || 'parkpilot-crm';
+const DB_KEY = 'parkpilot-crm.db';
 const FLAG_KEY = 'flags/sync-needed';
 const DB_BLOB = DB_KEY;
 
@@ -55,7 +55,7 @@ function netlifyStore() {
     },
     async backup(bytes, day) {
       await load();
-      const s = store(), key = `backups/coastfields-${day}.db`;
+      const s = store(), key = `backups/parkpilot-crm-${day}.db`;
       const r = await s.set(key, toAB(bytes), { onlyIfNew: true });
       if (!r.modified) return false;
       const { blobs } = await s.list({ prefix: 'backups/' });
@@ -87,7 +87,7 @@ function fileStore(dir) {
       return tag();
     },
     async backup(bytes, day) {
-      const f = path.join(dir, 'backups', `coastfields-${day}.db`);
+      const f = path.join(dir, 'backups', `parkpilot-crm-${day}.db`);
       if (fs.existsSync(f)) return false;
       fs.writeFileSync(f, Buffer.from(bytes));
       return true;
@@ -102,8 +102,8 @@ function fileStore(dir) {
 let store = null;
 function getStore() {
   if (!store) {
-    const useNetlify = process.env.COASTFIELDS_STORE === 'netlify' && !process.env.COASTFIELDS_DATA;
-    store = useNetlify ? netlifyStore() : fileStore(process.env.COASTFIELDS_DATA || path.join(__dirname, '..', 'data'));
+    const useNetlify = process.env.PARKPILOT_STORE === 'netlify' && !process.env.PARKPILOT_DATA;
+    store = useNetlify ? netlifyStore() : fileStore(process.env.PARKPILOT_DATA || path.join(__dirname, '..', 'data'));
   }
   return store;
 }

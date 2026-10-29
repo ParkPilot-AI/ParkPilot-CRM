@@ -1,10 +1,10 @@
 {
-  "name": "coastfields-customer-portal",
-  "version": "3.0.0",
+  "name": "parkpilot-crm",
+  "version": "1.0.0",
   "private": true,
-  "description": "Coastfields Customer Portal – sales CRM on Netlify with Microsoft sign-in and Outlook sync.",
+  "description": "ParkPilot CRM – sales CRM for ParkPilot on Netlify, with Google sign-in, Gmail lead capture and Google Calendar.",
   "scripts": {
-    "test": "node --test test/logic.test.js test/graph.test.js test/handler.test.js test/blobs.test.js test/roles.test.js test/leadno.test.js",
+    "test": "node --test test/logic.test.js test/google.test.js test/handler.test.js test/blobs.test.js test/roles.test.js test/leadno.test.js test/solo.test.js",
     "dev": "node dev/dev-server.js"
   },
   "engines": { "node": ">=20" },

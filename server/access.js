@@ -1,17 +1,18 @@
 'use strict';
-// People, parks and who can see what.
+// People and who can see what. ("Parks" in the code are sales teams; ParkPilot starts with one.)
 //
-//  Sales Executive      – works the leads allocated to them; can connect their own Outlook.
-//  Sales Manager        – everything at their park: all its leads (including unallocated ones),
-//                         the Captain's Log, the team, allocation and the deeper settings.
-//  Group Sales Manager  – everything at every park, plus adding parks and managers.
+//  Sales Executive  – works the leads allocated to them; can connect their own Google account.
+//  Sales Manager    – everything in their team: all its leads (including unallocated ones),
+//                     the Overview, the team, allocation and the deeper settings.
+//  Admin            – full access to everything: every lead, every setting, the team, backups.
+//                     Whoever is in OWNER_EMAILS (and the very first person to sign in) is an Admin.
 //
 // The signed-in person for the current request is kept in `ctx.user` (requests run one at a time).
 const { db, insert, update, get } = require('./db');
 const U = require('./util');
 
 const ROLES = ['exec', 'manager', 'group'];
-const ROLE_LABELS = { exec: 'Sales Executive', manager: 'Sales Manager', group: 'Group Sales Manager' };
+const ROLE_LABELS = { exec: 'Sales Executive', manager: 'Sales Manager', group: 'Admin' };
 const rank = r => ROLES.indexOf(r);
 const isManager = u => !!u && rank(u.role) >= 1;
 const isGroup = u => !!u && u.role === 'group';
@@ -20,7 +21,7 @@ const ctx = { user: null };
 
 function httpError(status, message) { const e = new Error(message); e.status = status; return e; }
 function requireManager(u) { if (!isManager(u)) throw httpError(403, 'Only sales managers can do that.'); }
-function requireGroup(u) { if (!isGroup(u)) throw httpError(403, 'Only group sales managers can do that.'); }
+function requireGroup(u) { if (!isGroup(u)) throw httpError(403, 'Only admins can do that.'); }
 
 /* ---------------------------------------------------------------- scope */
 
@@ -102,12 +103,7 @@ function owners() { return (process.env.OWNER_EMAILS || '').split(/[,;\s]+/).map
 function claimLegacy(uid) {
   db.prepare('UPDATE contacts SET owner_id = ?, assigned_at = COALESCE(assigned_at, enquiry_date, created_at) WHERE owner_id IS NULL').run(uid);
   db.prepare('UPDATE tasks SET owner_id = ? WHERE owner_id IS NULL').run(uid);
-  db.prepare('UPDATE tasks SET todo_user_id = ? WHERE todo_id IS NOT NULL AND todo_user_id IS NULL').run(uid);
   db.prepare('UPDATE appointments SET owner_id = ? WHERE owner_id IS NULL').run(uid);
-  db.prepare('UPDATE outlook_events SET user_id = ? WHERE user_id IS NULL').run(uid);
-  for (const k of ['msTokens', 'calDelta', 'todoList', 'todoDelta', 'subscription', 'graphStatus']) {
-    db.prepare('UPDATE OR IGNORE sync_state SET key = ? WHERE key = ?').run(`${k}:${uid}`, k);
-  }
 }
 
 // Finds (or, for OWNER_EMAILS and the very first sign-in, creates) the person signing in.

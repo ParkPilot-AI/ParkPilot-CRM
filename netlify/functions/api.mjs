@@ -4,7 +4,7 @@ import '@netlify/blobs';
 import 'sql.js';
 import core from '../../server/handler.js';
 
-process.env.COASTFIELDS_STORE = process.env.COASTFIELDS_STORE || 'netlify';
+process.env.PARKPILOT_STORE = process.env.PARKPILOT_STORE || 'netlify';
 
 export default async req => {
   const u = new URL(req.url);

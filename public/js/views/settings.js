@@ -3,56 +3,76 @@ import { importZone } from './importui.js';
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-// Everyone: their profile and their own Outlook. Sales managers and above: the team, and the
-// settings that shape everyone's diary and task list. Group sales managers: parks and backups.
+// Everyone: their profile and their own Google connection (Gmail leads and Google Calendar).
+// Managers and admins: the team, lead capture and the settings that shape the diary and task list.
+// Admins: backups and teams.
 export async function render(el, { query = {} } = {}) {
   const mgr = isMgr(), group = isGroupMgr(), u = me();
-  const [{ settings: s, outlook: o }, jobs, teamData] = await Promise.all([get('/api/settings'), mgr ? get('/api/jobs') : [], mgr ? get('/api/team') : null]);
+  const [{ settings: s, google: o }, jobs, teamData] = await Promise.all([get('/api/settings'), mgr ? get('/api/jobs') : [], mgr ? get('/api/team') : null]);
   const statusLine = !o.configured ? 'Not set up yet' : !o.connected ? 'Not connected' :
-    `Connected as ${esc(o.account?.email || '')}${o.lastPull ? `, last checked ${esc(o.lastPull.slice(11, 16))}` : ''}`;
+    `Connected as ${esc(o.account?.email || '')}${o.lastGmail ? `, Gmail checked ${esc(o.lastGmail.slice(11, 16))}` : ''}`;
 
   el.innerHTML = `
     <div class="today-head"><h1>Settings</h1><div class="spacer"></div><span class="muted small">Signed in as ${esc(u.email)}</span><a class="btn small" href="/auth/logout">Sign out</a></div>
     <div class="settings-grid">
       <section class="panel">
         <div class="panel-head"><h2>You</h2></div>
-        <dl class="kv"><dt>Name</dt><dd>${esc(u.name)}</dd><dt>Role</dt><dd>${esc(u.roleLabel)}</dd><dt>Park</dt><dd>${esc(group ? 'All parks' : u.park_name || '–')}</dd><dt>Email</dt><dd>${esc(u.email)}</dd></dl>
-        <p class="faint small" style="margin:0;padding:0 18px 16px">${mgr ? '' : 'Your sales manager looks after the team, opening hours and other shared settings.'}</p>
+        <dl class="kv"><dt>Name</dt><dd>${esc(u.name)}</dd><dt>Role</dt><dd>${esc(u.roleLabel)}${group ? ' (full access)' : ''}</dd><dt>Email</dt><dd>${esc(u.email)}</dd></dl>
+        <p class="faint small" style="margin:0;padding:0 18px 16px">${group ? 'As an admin you can change every setting, manage the team and download backups.' : mgr ? '' : 'Your sales manager looks after the team, opening hours and other shared settings.'}</p>
       </section>
 
-      <section class="panel" id="outlook">
-        <div class="panel-head"><h2>Your Outlook</h2><div class="spacer"></div><span class="sync-pill"><span class="dot ${o.connected ? (o.lastError ? 'warn' : 'ok') : ''}"></span>${statusLine}</span></div>
+      <section class="panel" id="google">
+        <div class="panel-head"><h2>Gmail and Google Calendar</h2><div class="spacer"></div><span class="sync-pill"><span class="dot ${o.connected ? (o.lastError ? 'warn' : 'ok') : ''}"></span>${statusLine}</span></div>
         <div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
-          <p class="muted" style="margin:0">Appointments in your diary go straight into your own Outlook calendar, with the invite and Teams link sent from your mailbox. Anything you move or cancel in Outlook updates here within a few minutes. Your tasks also appear in Microsoft To Do under a “Coastfields CRM” list.</p>
-          ${o.lastError ? `<div class="callout warn"><b>Last sync problem:</b> ${esc(o.lastError)}</div>` : ''}
-          ${o.errors ? `<div class="callout warn">${o.errors} appointment(s) could not be sent to Outlook. <button class="btn small" data-retry>Try again</button></div>` : ''}
-          ${o.connected ? `<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-sync>Sync now</button><button class="btn danger" data-disconnect>Disconnect</button></div>`
-          : o.managed ? `<p style="margin:0">Click below and sign in with your own Microsoft work account.</p><div><a class="btn primary" href="/api/auth/start">Connect my Outlook</a></div>`
-          : `<div class="callout warn">The Outlook connection isn’t set up for the portal yet. ${mgr ? 'Add GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET and GRAPH_TENANT_ID in Netlify, redeploy, then reload this page.' : 'Ask your sales manager.'}</div>`}
-          ${mgr ? `<label class="check"><input type="checkbox" data-todo ${s.todoMirror ? 'checked' : ''}> Copy everyone’s tasks to their Microsoft To Do</label>` : ''}
+          <ol class="google-steps">
+            <li>Put the <b>${esc(o.gmailLabel)}</b> label on an enquiry in Gmail (or let a Gmail filter do it). Within 10 minutes it becomes a lead here, with a “Reply to…” task for today. Emails from people already in the CRM go on their timeline instead.</li>
+            <li>The CRM then moves the email to the <b>${esc(o.gmailDoneLabel)}</b> label, so nothing is imported twice.</li>
+            <li>Demos and calls you book here go into your Google Calendar, with a Google Meet link and an invite to the customer.</li>
+          </ol>
+          ${o.lastError ? `<div class="callout warn"><b>Last problem:</b> ${esc(o.lastError)}</div>` : ''}
+          ${o.errors ? `<div class="callout warn">${o.errors} appointment(s) could not be added to Google Calendar. <button class="btn small" data-retry>Try again</button></div>` : ''}
+          ${o.connected ? `<div class="faint small">${o.gmailTotal ? `${plural(o.gmailTotal, 'lead')} created from Gmail so far.` : 'No leads from Gmail yet.'}${o.lastGmailCounts && (o.lastGmailCounts.created || o.lastGmailCounts.updated) ? ` Last check: ${o.lastGmailCounts.created} new, ${o.lastGmailCounts.updated} added to existing leads.` : ''}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-sync>Check Gmail now</button><button class="btn danger" data-disconnect>Disconnect</button></div>`
+          : o.configured ? `<div><a class="btn primary" href="/api/google/start">Connect Gmail and Google Calendar</a></div>
+            <p class="faint small" style="margin:0">Sign in with ${esc(u.email)} and tick every box on Google’s permission page.</p>`
+          : `<div class="callout warn">Google isn’t set up for the CRM yet. ${mgr ? 'Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Netlify, redeploy, then reload this page.' : 'Ask your sales manager.'}</div>`}
         </div>
       </section>
+
+      ${mgr ? `<section class="panel">
+        <div class="panel-head"><h2>Lead capture</h2></div>
+        <form class="panel-body" data-form="leads" style="display:flex;flex-direction:column;gap:14px">
+          <div class="grid2">
+            <label class="field">Gmail label for new leads<input name="gmailLabel" value="${esc(s.gmailLabel)}" required></label>
+            <label class="field">Label after importing<input name="gmailDoneLabel" value="${esc(s.gmailDoneLabel)}" required></label>
+          </div>
+          <label class="field">Your own email domains<input name="ownDomains" value="${esc(s.ownDomains || '')}" placeholder="e.g. parkpilot.uk"><span class="plan-hint">Emails from these addresses are never treated as the lead (your own domain is always included). Separate several with commas.</span></label>
+          <label class="check"><input type="checkbox" name="replyTask" ${s.replyTask !== false ? 'checked' : ''}> Add a “Reply to…” task for today for every new email</label>
+          <label class="check"><input type="checkbox" name="calendarSync" ${s.calendarSync !== false ? 'checked' : ''}> Put appointments in Google Calendar</label>
+          <div><button class="btn primary">Save lead capture settings</button></div>
+        </form>
+      </section>` : ''}
 
       ${mgr ? teamPanel(teamData, u, group) : ''}
 
       ${mgr ? `<section class="panel">
-        <div class="panel-head"><h2>Opening hours and diary</h2><span class="faint small">All parks</span></div>
+        <div class="panel-head"><h2>Working hours and diary</h2></div>
         <form class="panel-body" data-form="diary" style="display:flex;flex-direction:column;gap:14px">
           <div class="grid3">
             <label class="field">Opens<input type="time" name="open" value="${esc(s.openingHours.start)}"></label>
             <label class="field">Closes<input type="time" name="close" value="${esc(s.openingHours.end)}"></label>
             <label class="field">Gap after appointments<select name="buffer">${options([0, 10, 15, 20, 30].map(v => ({ value: v, label: v ? v + ' minutes' : 'None' })), s.bufferMinutes)}</select></label>
           </div>
-          <div class="field"><span>Sales office closed on</span><div style="display:flex;gap:14px;flex-wrap:wrap">${[1, 2, 3, 4, 5, 6, 0].map(d => `<label class="check"><input type="checkbox" name="closed" value="${d}" ${s.closedDays.includes(d) ? 'checked' : ''}> ${DAYS[d].slice(0, 3)}</label>`).join('')}</div>
+          <div class="field"><span>Not working on</span><div style="display:flex;gap:14px;flex-wrap:wrap">${[1, 2, 3, 4, 5, 6, 0].map(d => `<label class="check"><input type="checkbox" name="closed" value="${d}" ${s.closedDays.includes(d) ? 'checked' : ''}> ${DAYS[d].slice(0, 3)}</label>`).join('')}</div>
             <span class="faint small" style="font-weight:400">Tasks never roll onto a closed day, and no appointments are suggested then.</span></div>
           <div class="field"><span>Default appointment lengths (minutes)</span><div class="grid3">${Object.entries(s.durations).map(([k, v]) => `<label class="field" style="font-weight:500">${esc(k)}<input type="number" min="5" step="5" name="dur:${esc(k)}" value="${v}"></label>`).join('')}</div></div>
-          <label class="field">Default location for visits<input name="officeLocation" value="${esc(s.officeLocation)}"></label>
+          <label class="field">Default location for site visits<input name="officeLocation" value="${esc(s.officeLocation)}"></label>
           <div><button class="btn primary">Save diary settings</button></div>
         </form>
       </section>
 
       <section class="panel">
-        <div class="panel-head"><h2>Task rollover</h2><span class="faint small">Everyone</span></div>
+        <div class="panel-head"><h2>Task rollover</h2></div>
         <form class="panel-body" data-form="tasks" style="display:flex;flex-direction:column;gap:14px">
           <p class="muted" style="margin:0">Every night, unfinished tasks from earlier days move onto today’s list. They keep the date they were first due, and are coloured amber when 1–2 days late and red when 3 or more days late (or any late High-priority task).</p>
           <div class="grid3">
@@ -60,7 +80,7 @@ export async function render(el, { query = {} } = {}) {
             <label class="field">Raise priority after<select name="escalateAfter">${options([2, 3, 4, 5].map(v => ({ value: v, label: v + ' rollovers' })), s.escalateAfter)}</select></label>
             <label class="field">Ask “still relevant?” after<select name="reviewAfter">${options([3, 5, 7, 10].map(v => ({ value: v, label: v + ' rollovers' })), s.reviewAfter)}</select></label>
           </div>
-          <label class="field">Treat enquiries as active for<select name="activeLeadDays">${options([30, 60, 90, 180, 365].map(v => ({ value: v, label: v + ' days' })), s.activeLeadDays)}</select></label>
+          <label class="field">Imported enquiries count as active if newer than<select name="activeLeadDays">${options([30, 60, 90, 180, 365].map(v => ({ value: v, label: v + ' days' })), s.activeLeadDays)}</select></label>
           <div style="display:flex;gap:8px"><button class="btn primary">Save rollover settings</button><button type="button" class="btn" data-rollnow>Roll over now</button></div>
         </form>
       </section>
@@ -69,8 +89,8 @@ export async function render(el, { query = {} } = {}) {
         <div class="panel-head"><h2>Import, export${group ? ' and backup' : ''}</h2></div>
         <div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
           <div data-import></div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="/api/export/contacts.csv" download>Export ${group ? 'all' : 'your park’s'} contacts (CSV)</a>${group ? '<a class="btn" href="/api/backup" download>Download a backup</a>' : ''}</div>
-          ${group ? '<p class="faint small" style="margin:0">Your data is kept in this site’s private Netlify Blobs storage, with a dated copy saved each day for 60 days. Download a backup now and then and keep it somewhere safe, such as SharePoint or OneDrive.</p>' : ''}
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="/api/export/contacts.csv" download>Export ${group ? 'all' : 'your team’s'} leads (CSV)</a>${group ? '<a class="btn" href="/api/backup" download>Download a backup</a>' : ''}</div>
+          ${group ? '<p class="faint small" style="margin:0">Your data is kept in this site’s private Netlify Blobs storage, with a dated copy saved each day for 60 days. Download a backup now and then and keep it somewhere safe, such as Google Drive.</p>' : ''}
         </div>
       </section>
 
@@ -80,20 +100,34 @@ export async function render(el, { query = {} } = {}) {
       </section>` : ''}
     </div>`;
 
-  /* ---- Outlook ---- */
+  /* ---- Google ---- */
   el.querySelector('[data-sync]')?.addEventListener('click', async e => {
-    e.target.disabled = true; e.target.textContent = 'Syncing…';
-    const r = await post('/api/outlook/sync');
-    if (r.result.error) toast('Sync problem: ' + r.result.error, { error: true });
-    else toast(`Outlook synced${r.result.calendar ? summariseCounts(r.result.calendar) : ''}`);
+    e.target.disabled = true; e.target.textContent = 'Checking…';
+    const r = await post('/api/google/sync');
+    const g = r.result.gmail || {};
+    if (r.result.error || g.error) toast('Problem: ' + (r.result.error || g.error), { error: true });
+    else toast(g.created || g.updated ? `Gmail checked: ${plural(g.created || 0, 'new lead')}${g.updated ? `, ${g.updated} added to existing leads` : ''}` : `Gmail checked: nothing labelled “${o.gmailLabel}”`);
     render(el);
   });
-  el.querySelector('[data-disconnect]')?.addEventListener('click', async () => { await post('/api/outlook/disconnect'); await loadMeta(); toast('Outlook disconnected'); render(el); });
-  el.querySelector('[data-retry]')?.addEventListener('click', async () => { await post('/api/outlook/retry'); toast('Trying again'); setTimeout(() => render(el), 2000); });
-  el.querySelector('[data-todo]')?.addEventListener('change', async e => { await api('PUT', '/api/settings', { todoMirror: e.target.checked }); toast(e.target.checked ? 'Tasks will copy to To Do' : 'Stopped copying tasks to To Do'); });
+  el.querySelector('[data-disconnect]')?.addEventListener('click', async () => {
+    if (!await confirmBox('Disconnect Google?', 'New emails will stop becoming leads and appointments won’t go into Google Calendar until you connect again. Nothing already in the CRM is removed.', { ok: 'Disconnect', danger: true })) return;
+    await post('/api/google/disconnect'); await loadMeta(); toast('Google disconnected'); render(el);
+  });
+  el.querySelector('[data-retry]')?.addEventListener('click', async () => { await post('/api/google/retry'); toast('Trying again'); setTimeout(() => render(el), 2000); });
+  if (query.connected) toast('Google connected. Labelled emails will now become leads.');
   if (!mgr) return;
 
   bindTeam(el, teamData);
+
+  /* ---- Lead capture ---- */
+  el.querySelector('[data-form=leads]').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    if (f.gmailLabel.value.trim().toLowerCase() === f.gmailDoneLabel.value.trim().toLowerCase()) { toast('Use two different labels', { error: true }); return; }
+    await api('PUT', '/api/settings', { gmailLabel: f.gmailLabel.value.trim(), gmailDoneLabel: f.gmailDoneLabel.value.trim(), ownDomains: f.ownDomains.value.trim(),
+      replyTask: f.replyTask.checked, calendarSync: f.calendarSync.checked });
+    await loadMeta(); toast('Lead capture settings saved'); render(el);
+  });
 
   /* ---- Diary ---- */
   el.querySelector('[data-form=diary]').addEventListener('submit', async e => {
@@ -104,7 +138,7 @@ export async function render(el, { query = {} } = {}) {
     for (const inp of f.querySelectorAll('[name^="dur:"]')) durations[inp.name.slice(4)] = Number(inp.value) || 30;
     await api('PUT', '/api/settings', {
       openingHours: { start: f.open.value, end: f.close.value }, bufferMinutes: Number(f.buffer.value),
-      closedDays: [...f.querySelectorAll('[name=closed]:checked')].map(i => Number(i.value)), durations, officeLocation: f.officeLocation.value || 'Sales office'
+      closedDays: [...f.querySelectorAll('[name=closed]:checked')].map(i => Number(i.value)), durations, officeLocation: f.officeLocation.value || 'At the park'
     });
     await loadMeta(); toast('Diary settings saved');
   });
@@ -127,18 +161,17 @@ function teamPanel(t, u, group) {
   const active = t.people.filter(p => p.active), gone = t.people.filter(p => !p.active);
   const row = p => `<li class="person${p.active ? '' : ' gone'}">
       <span class="who"><b>${esc(p.name || p.email)}${p.isMe ? ' (you)' : ''}</b><span class="faint small">${esc(p.roleLabel)}${group && p.park_name ? ' · ' + esc(p.park_name) : ''} · ${esc(p.email)}</span>
-        <span class="small">${p.active ? `${plural(p.leads, 'open lead')}${p.overdue ? ` · <span class="badge red">${p.overdue} late</span>` : ''} · ${p.outlook ? 'Outlook connected' : '<span class="faint">Outlook not connected</span>'} · ${p.last_seen_at ? 'last in ' + esc(fmtAgo(p.last_seen_at)) : '<span class="faint">not signed in yet</span>'}` : '<span class="faint">No longer has access</span>'}</span></span>
+        <span class="small">${p.active ? `${plural(p.leads, 'open lead')}${p.overdue ? ` · <span class="badge red">${p.overdue} late</span>` : ''} · ${p.google ? 'Google connected' : '<span class="faint">Google not connected</span>'} · ${p.last_seen_at ? 'last in ' + esc(fmtAgo(p.last_seen_at)) : '<span class="faint">not signed in yet</span>'}` : '<span class="faint">No longer has access</span>'}</span></span>
       <span class="acts">${p.canEdit && !p.isMe ? (p.active ? `<button class="btn small" data-editperson="${p.id}">Edit</button> <button class="btn small ghost danger" data-removeperson="${p.id}">Remove</button>` : `<button class="btn small" data-restore="${p.id}">Restore</button>`) : ''}</span>
     </li>`;
   return `<section class="panel span2" id="team">
-    <div class="panel-head"><h2>Team${group ? ' and parks' : ` at ${esc(u.park_name || 'your park')}`}</h2><div class="spacer"></div><button class="btn primary small" data-addperson>+ Add person</button></div>
+    <div class="panel-head"><h2>Team</h2><div class="spacer"></div><button class="btn primary small" data-addperson>+ Add person</button></div>
     <div class="panel-body" style="padding-top:0">
-      <p class="faint small" style="margin:6px 0 10px">People sign in with their own Microsoft work account. Add them here first${group ? '' : '; you can add sales executives at your park'}. Removing someone stops their access at once and hands their leads on.</p>
+      <p class="faint small" style="margin:6px 0 10px">People sign in with their own Google account. ${t.people.filter(p => p.active).length <= 1 ? 'It’s just you for now. When someone joins, add them here first; they’ll then be able to sign in.' : `Add them here first${group ? '' : '; you can add sales executives to your team'}. Removing someone stops their access at once and hands their leads on.`}</p>
       <ul class="people">${active.map(row).join('')}</ul>
       ${gone.length ? `<details style="margin-top:8px"><summary class="small muted" style="cursor:pointer">${plural(gone.length, 'former team member')}</summary><ul class="people">${gone.map(row).join('')}</ul></details>` : ''}
-      ${group ? `<h3 style="margin:18px 0 8px;font-size:15px">Parks</h3>
-        <ul class="people">${t.parks.map(p => `<li class="person"><span class="who"><b>${esc(p.name)}</b><span class="faint small">${plural(p.people, 'person', 'people')} · ${plural(p.leads, 'lead')}</span></span><span class="acts"><button class="btn small" data-renamepark="${p.id}" data-name="${esc(p.name)}">Rename</button></span></li>`).join('')}</ul>
-        <div style="margin-top:10px"><button class="btn small" data-addpark>+ Add park</button></div>` : ''}
+      ${group && t.parks.length > 1 ? `<h3 style="margin:18px 0 8px;font-size:15px">Sales teams</h3>
+        <ul class="people">${t.parks.map(p => `<li class="person"><span class="who"><b>${esc(p.name)}</b><span class="faint small">${plural(p.people, 'person', 'people')} · ${plural(p.leads, 'lead')}</span></span><span class="acts"><button class="btn small" data-renamepark="${p.id}" data-name="${esc(p.name)}">Rename</button></span></li>`).join('')}</ul>` : ''}
     </div>
   </section>`;
 }
@@ -164,12 +197,13 @@ function personDialog(p, done) {
   modal({
     title: p ? `Edit ${p.name}` : 'Add someone to the team',
     body: `
-      <label class="field">Work email<input name="email" type="email" value="${esc(p ? p.email : '')}" ${p ? 'disabled' : 'autofocus required'} placeholder="name@yourcompany.co.uk"></label>
+      <label class="field">Google account email<input name="email" type="email" value="${esc(p ? p.email : '')}" ${p ? 'disabled' : 'autofocus required'} placeholder="name@parkpilot.uk"></label>
       <label class="field">Name<input name="name" value="${esc(p ? p.name : '')}" placeholder="As it should appear to the team"></label>
       ${group ? `<div class="grid2">
         <label class="field">Role<select name="role">${options(Object.entries(roles).map(([value, label]) => ({ value, label })), p ? p.role : 'exec')}</select></label>
-        <label class="field" data-parkrow>Park<select name="park_id">${parkOptions(p ? p.park_id : me().park_id)}</select></label></div>`
-      : `<p class="faint small" style="margin:0">They’ll be a ${esc(roles.exec)} at ${esc(me().park_name || 'your park')}.</p>`}`,
+        <label class="field" data-parkrow>Team<select name="park_id">${parkOptions(p ? p.park_id : me().park_id)}</select></label></div>
+        <p class="faint small" style="margin:0">${esc(roles.exec)}: their own leads. ${esc(roles.manager)}: the whole team’s leads and settings. ${esc(roles.group)}: full access.</p>`
+      : `<p class="faint small" style="margin:0">They’ll be a ${esc(roles.exec)} in your team.</p>`}`,
     foot: `<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${p ? 'Save' : 'Add to team'}</button>`,
     onMount(root, close, form) {
       const sync = () => { const r = root.querySelector('[data-parkrow]'); if (r) r.querySelector('select').disabled = false; };
@@ -180,7 +214,7 @@ function personDialog(p, done) {
         if (!p && !d.email) { form.email.focus(); return; }
         if (d.park_id) d.park_id = Number(d.park_id);
         if (p) await patch(`/api/users/${p.id}`, d); else await post('/api/users', d);
-        close(); toast(p ? 'Saved' : `${d.name || d.email} added. They can now sign in with their Microsoft account.`); done();
+        close(); toast(p ? 'Saved' : `${d.name || d.email} added. They can now sign in with their Google account.`); done();
       });
     }
   });
@@ -206,33 +240,26 @@ function removeDialog(p, done) {
 
 function parkDialog(park, done) {
   modal({
-    title: park ? 'Rename park' : 'Add a park',
-    body: `<label class="field">Park name<input name="name" value="${esc(park ? park.name : '')}" autofocus required></label>`,
-    foot: `<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${park ? 'Save' : 'Add park'}</button>`,
+    title: park ? 'Rename team' : 'Add a team',
+    body: `<label class="field">Team name<input name="name" value="${esc(park ? park.name : '')}" autofocus required></label>`,
+    foot: `<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${park ? 'Save' : 'Add team'}</button>`,
     onMount(root, close, form) {
       form.addEventListener('submit', async e => {
         e.preventDefault();
         if (!form.name.value.trim()) { form.name.focus(); return; }
         if (park) await patch(`/api/parks/${park.id}`, { name: form.name.value }); else await post('/api/parks', { name: form.name.value });
-        close(); toast(park ? 'Park renamed' : 'Park added'); done();
+        close(); toast(park ? 'Team renamed' : 'Team added'); done();
       });
     }
   });
 }
 
-function summariseCounts(c) {
-  const parts = [];
-  if (c.moved) parts.push(`${c.moved} moved`);
-  if (c.linked) parts.push(`${c.linked} linked`);
-  if (c.cancelled || c.removed) parts.push(`${(c.cancelled || 0) + (c.removed || 0)} removed`);
-  return parts.length ? ': ' + parts.join(', ') : ', no changes';
-}
 function summarise(j) {
   try {
     const d = JSON.parse(j.detail);
     if (j.job === 'import') return `${d.fileName}: ${d.created} new, ${d.updated} updated`;
     if (j.job === 'rollover') return `${d.count} task(s) brought forward`;
-    if (j.job === 'outlook-sync') return summariseCounts(d || {}).replace(/^[:,] /, '');
+    if (j.job === 'gmail') return `${d.created || 0} new lead(s), ${d.updated || 0} added to existing${d.failed ? `, ${d.failed} failed` : ''}`;
     return typeof d === 'string' ? d : '';
   } catch { return j.detail || ''; }
 }
