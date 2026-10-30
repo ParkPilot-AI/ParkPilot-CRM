@@ -422,7 +422,7 @@ route('GET', '/api/settings', ({ user }) => ({ settings: getSettings(), google: 
 route('PUT', '/api/settings', ({ user, body }) => {
   A.requireManager(user);
   for (const k of Object.keys(DEFAULT_SETTINGS)) if (k in body) setSetting(k, body[k]);
-  if ('gmailLabel' in body || 'gmailDoneLabel' in body) db.prepare("DELETE FROM sync_state WHERE key LIKE 'gLabels:%'").run(); // looked up again next time
+  if ('gmailLabel' in body || 'gmailDoneLabel' in body || 'gmailSkippedLabel' in body) db.prepare("DELETE FROM sync_state WHERE key LIKE 'gLabels:%'").run(); // looked up again next time
   return { settings: getSettings() };
 });
 
@@ -568,6 +568,8 @@ route('GET', '/api/google/callback', ({ user, query }) => google.as(user.id, asy
   try { await google.finishAuth(query); return raw(302, '', { Location: '/#/settings?connected=1' }); }
   catch (e) { return raw(200, page('Could not connect Google', e.message), { 'Content-Type': 'text/html; charset=utf-8' }); }
 }));
+route('GET', '/api/google/unnamed', ({ user }) => { A.requireManager(user); return { count: google.unnamedLeads() }; });
+route('POST', '/api/google/unnamed/remove', ({ user }) => { A.requireManager(user); return { removed: google.unnamedLeads({ remove: true }) }; });
 route('POST', '/api/google/retry', ({ user }) => google.withUser(user.id, () => { google.retryErrors(); return google.status(); }));
 route('GET', '/api/me', ({ user }) => ({ user: A.publicUser(user), contacts: db.prepare('SELECT COUNT(*) n FROM contacts WHERE owner_id = ?').get(user.id).n }));
 

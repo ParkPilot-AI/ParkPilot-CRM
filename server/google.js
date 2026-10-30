@@ -291,9 +291,9 @@ async function processPushQueue() {
 // Finds (or makes) the two labels: the one you put on leads, and the one the CRM moves them to.
 async function ensureLabels() {
   const s = getSettings();
-  const want = { source: (s.gmailLabel || 'CRM Leads').trim(), done: (s.gmailDoneLabel || 'CRM Imported').trim() };
+  const want = { source: (s.gmailLabel || 'CRM Leads').trim(), done: (s.gmailDoneLabel || 'CRM Imported').trim(), incomplete: (s.gmailSkippedLabel || 'CRM Not imported').trim() };
   const saved = getState(K('gLabels'));
-  if (saved && saved.source && saved.source.name === want.source && saved.done && saved.done.name === want.done) return saved;
+  if (saved && Object.entries(want).every(([k, name]) => saved[k] && saved[k].name === name)) return saved;
   const list = (await gFetch('GET', `${GMAIL}/labels`)).labels || [];
   const out = {};
   for (const [k, name] of Object.entries(want)) {
@@ -391,8 +391,10 @@ function splitName(full) {
 const tidy = s => { s = String(s || '').trim(); return s && s === s.toLowerCase() ? s.replace(/(^|[\s'-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()) : s; };
 function nameFromEmail(email) {
   const local = String(email || '').split('@')[0];
-  if (!local || /^(info|hello|enquiries|enquiry|sales|admin|office|reception|contact|bookings|no-?reply|mail|team)$/i.test(local)) return { first_name: '', last_name: '' };
-  return splitName(tidy(local.replace(/[._-]+/g, ' ').replace(/\d+/g, '').trim()));
+  // Only an address that clearly reads first.last (or first_last, first-last) gives a name.
+  const m = /^([a-z]{2,})[._-]([a-z]{2,})\d*$/i.exec(local);
+  if (!m || /^(info|hello|enquiries|enquiry|sales|admin|office|reception|contact|bookings|no|noreply|reply|mail|team|support|accounts|marketing)$/i.test(m[1])) return { first_name: '', last_name: '' };
+  return { first_name: tidy(m[1].toLowerCase()), last_name: tidy(m[2].toLowerCase()) };
 }
 function productFrom(text) {
   const s = String(text || '').toLowerCase();
@@ -441,12 +443,18 @@ function ownDomains(userEmail) {
   return [...new Set([String(userEmail || '').split('@')[1], ...String(s.ownDomains || '').split(/[,;\s]+/)].map(d => (d || '').trim().toLowerCase()).filter(Boolean))];
 }
 
-// Adds one email to the CRM for `ownerId`. Returns 'created', 'updated' or 'skipped'.
+// A lead needs a real name and a way to reach them (email or phone).
+const isComplete = lead => !!((lead.first_name || lead.last_name) && (lead.email || lead.mobile));
+
+// Adds one email to the CRM for `ownerId`. Returns 'created', 'updated', 'skipped' (already done)
+// or 'incomplete' (no name or no contact details, and not from anyone already in the CRM).
 function importMessage(m, ownerId, { account } = {}) {
   if (getState('gmail:' + m.id)) return 'skipped';
   const L = require('./logic');
   const owner = get('users', ownerId);
   const lead = leadFromMessage(m, { own: ownDomains(owner && owner.email) });
+  const known = lead.email && db.prepare('SELECT 1 FROM contacts WHERE lower(email) = ?').get(lead.email);
+  if (!known && !isComplete(lead)) return 'incomplete';
   const link = `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(account || (owner && owner.email) || '')}#all/${m.threadId}`;
   const subject = m.subject || '(no subject)';
   const s = getSettings();
@@ -485,7 +493,7 @@ function importMessage(m, ownerId, { account } = {}) {
 async function pullLeads({ budgetMs = 15e3 } = {}) {
   if (!isConnected(cur()) || gmailBusy) return { connected: isConnected(cur()) };
   gmailBusy = true;
-  const counts = { created: 0, updated: 0, skipped: 0, failed: 0 };
+  const counts = { created: 0, updated: 0, skipped: 0, incomplete: 0, failed: 0 };
   const deadline = Date.now() + budgetMs;
   try {
     let labels;
@@ -506,13 +514,14 @@ async function pullLeads({ budgetMs = 15e3 } = {}) {
         const m = parseMessage(msg);
         const r = m.labelIds.includes(labels.done.id) && getState('gmail:' + m.id) ? 'skipped' : importMessage(m, cur(), { account });
         counts[r]++;
-        await gFetch('POST', `${GMAIL}/messages/${ref.id}/modify`, { addLabelIds: [labels.done.id], removeLabelIds: [labels.source.id] });
+        // Emails without a name and contact details go to their own label, so you can check them.
+        await gFetch('POST', `${GMAIL}/messages/${ref.id}/modify`, { addLabelIds: [(r === 'incomplete' ? labels.incomplete : labels.done).id], removeLabelIds: [labels.source.id] });
       } catch (e) { counts.failed++; setGStatus({ lastError: 'Gmail: ' + e.message }); if (/isn’t connected|expired or was removed/.test(e.message)) break; }
     }
     if (counts.created || counts.updated) require('./importer').recomputeDuplicates();
     const total = (gStatus().gmailTotal || 0) + counts.created;
     setGStatus({ lastGmail: U.nowStamp(), lastGmailMs: Date.now(), gmailTotal: total, lastGmailCounts: counts, ...(counts.failed ? {} : { lastError: null }) });
-    if (counts.created || counts.updated || counts.failed) logJob('gmail', counts);
+    if (counts.created || counts.updated || counts.failed || counts.incomplete) logJob('gmail', counts);
   } finally { gmailBusy = false; }
   return counts;
 }
@@ -556,7 +565,7 @@ function status(uid) {
     const s = getSettings();
     return {
       configured: configured(), connected: isConnected(cur()), account: t && t.account, redirectUri: redirectUri(),
-      gmailLabel: s.gmailLabel || 'CRM Leads', gmailDoneLabel: s.gmailDoneLabel || 'CRM Imported',
+      gmailLabel: s.gmailLabel || 'CRM Leads', gmailDoneLabel: s.gmailDoneLabel || 'CRM Imported', gmailSkippedLabel: s.gmailSkippedLabel || 'CRM Not imported',
       lastGmail: st.lastGmail || null, lastGmailCounts: st.lastGmailCounts || null, gmailTotal: st.gmailTotal || 0,
       lastPush: st.lastPush || null, lastError: st.lastError || null,
       pending: db.prepare("SELECT COUNT(*) n FROM appointments WHERE owner_id = ? AND sync_status = 'Pending'").get(cur()).n,
@@ -565,13 +574,30 @@ function status(uid) {
   });
 }
 
+// Leads made from Gmail with no name or no contact details, and nothing done with them since
+// (no notes, calls, appointments or deal progress). `remove` deletes them.
+function unnamedLeads({ remove = false } = {}) {
+  const rows = db.prepare(`SELECT c.id FROM contacts c
+    WHERE c.lead_source IN ('Email','Website form')
+      AND ((trim(COALESCE(c.first_name,'')) = '' AND trim(COALESCE(c.last_name,'')) = '')
+           OR (trim(COALESCE(c.email,'')) = '' AND trim(COALESCE(c.mobile,'')) = ''))
+      AND NOT EXISTS (SELECT 1 FROM interactions i WHERE i.contact_id = c.id AND i.type NOT IN ('Email','Deal'))
+      AND NOT EXISTS (SELECT 1 FROM appointments a WHERE a.contact_id = c.id)
+      AND NOT EXISTS (SELECT 1 FROM deals d WHERE d.contact_id = c.id AND d.stage <> 'Enquiry')`).all().map(r => r.id);
+  if (remove && rows.length) {
+    tx(() => { for (const id of rows) db.prepare('DELETE FROM contacts WHERE id = ?').run(id); });
+    logJob('gmail', `Removed ${rows.length} unnamed lead(s) imported from Gmail`);
+  }
+  return rows.length;
+}
+
 function retryErrors() {
   db.prepare("UPDATE appointments SET sync_status = 'Pending', sync_attempts = 0 WHERE owner_id = ? AND sync_status = 'Error'").run(cur());
 }
 
 module.exports = {
   setOrigin, startAuth, finishAuth, disconnect, isConnected, configured, queuePush, queueCancel, queueTodoSync, syncNow, pullLeads, flush, needsSync,
-  status, retryErrors, gFetch, as, withUser, connectedUsers, ensureLabels, importMessage,
+  status, retryErrors, unnamedLeads, gFetch, as, withUser, connectedUsers, ensureLabels, importMessage,
   // pure helpers, exported for tests
   parseMessage, leadFromMessage, formFields, htmlToText, splitName, productFrom, eventId, eventBody
 };

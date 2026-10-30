@@ -58,7 +58,7 @@ The site won't let anyone in yet – that's expected until Step 3.
 2. Go to **Settings → Gmail and Google Calendar → Connect Gmail and Google Calendar**.
 3. On Google's page, **tick every box** and click **Continue**.
 4. Back in the CRM you'll see "Connected". Two new labels now appear in Gmail:
-   **CRM Leads** and **CRM Imported**.
+   **CRM Leads**, **CRM Imported** and **CRM Not imported**.
 
 ## Step 5 – Start getting leads
 
@@ -75,6 +75,8 @@ What happens to each email:
 - New person → new lead in **Enquiry**, with a **Reply to…** task due today.
 - Someone already in the CRM → added to their timeline (with an **Open in Gmail** link).
 - The email moves from **CRM Leads** to **CRM Imported**, so it's never imported twice.
+- No name, or no email address or phone number → **not** imported. It moves to **CRM Not imported**
+  so you can check it; if it's a real enquiry, add the person with **+ New → Lead**.
 
 ## Everyday use
 

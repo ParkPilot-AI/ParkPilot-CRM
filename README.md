@@ -11,6 +11,9 @@ signed in with Google.
   10 minutes it becomes a lead with a "Reply to…" task for today. Website form emails are read field by
   field (Name, Email, Phone, Park, Units, Role, County, Interested in, Message). Emails from people
   already in the CRM go on their timeline instead. Imported emails move to `CRM Imported`.
+  Only emails with a name and an email address or phone number become leads; the rest move to
+  `CRM Not imported` for you to check. Settings offers a one-click clean-up of unnamed leads
+  imported earlier.
 - **Park operator details** on every lead: park or group name, job title, units, number of parks,
   area, website, current systems and which product they're interested in.
 - **Deals priced in ParkPilot plans** (AI Starter £495 / Professional £995 / Enterprise; CRM Essentials

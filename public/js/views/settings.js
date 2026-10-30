@@ -8,7 +8,7 @@ const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 
 // Admins: backups and teams.
 export async function render(el, { query = {} } = {}) {
   const mgr = isMgr(), group = isGroupMgr(), u = me();
-  const [{ settings: s, google: o }, jobs, teamData] = await Promise.all([get('/api/settings'), mgr ? get('/api/jobs') : [], mgr ? get('/api/team') : null]);
+  const [{ settings: s, google: o }, jobs, teamData, unnamed] = await Promise.all([get('/api/settings'), mgr ? get('/api/jobs') : [], mgr ? get('/api/team') : null, mgr ? get('/api/google/unnamed') : { count: 0 }]);
   const statusLine = !o.configured ? 'Not set up yet' : !o.connected ? 'Not connected' :
     `Connected as ${esc(o.account?.email || '')}${o.lastGmail ? `, Gmail checked ${esc(o.lastGmail.slice(11, 16))}` : ''}`;
 
@@ -26,12 +26,13 @@ export async function render(el, { query = {} } = {}) {
         <div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
           <ol class="google-steps">
             <li>Put the <b>${esc(o.gmailLabel)}</b> label on an enquiry in Gmail (or let a Gmail filter do it). Within 10 minutes it becomes a lead here, with a “Reply to…” task for today. Emails from people already in the CRM go on their timeline instead.</li>
-            <li>The CRM then moves the email to the <b>${esc(o.gmailDoneLabel)}</b> label, so nothing is imported twice.</li>
+            <li>Only emails with a <b>name</b> and an <b>email address or phone number</b> become leads. The CRM moves them to <b>${esc(o.gmailDoneLabel)}</b>, so nothing is imported twice. Emails without those details go to <b>${esc(o.gmailSkippedLabel)}</b> instead; if one is a real enquiry, add the person here with + New → Lead.</li>
             <li>Demos and calls you book here go into your Google Calendar, with a Google Meet link and an invite to the customer.</li>
           </ol>
           ${o.lastError ? `<div class="callout warn"><b>Last problem:</b> ${esc(o.lastError)}</div>` : ''}
           ${o.errors ? `<div class="callout warn">${o.errors} appointment(s) could not be added to Google Calendar. <button class="btn small" data-retry>Try again</button></div>` : ''}
-          ${o.connected ? `<div class="faint small">${o.gmailTotal ? `${plural(o.gmailTotal, 'lead')} created from Gmail so far.` : 'No leads from Gmail yet.'}${o.lastGmailCounts && (o.lastGmailCounts.created || o.lastGmailCounts.updated) ? ` Last check: ${o.lastGmailCounts.created} new, ${o.lastGmailCounts.updated} added to existing leads.` : ''}</div>
+          ${unnamed.count ? `<div class="callout warn">${plural(unnamed.count, 'lead')} from Gmail ${unnamed.count === 1 ? 'has' : 'have'} no name or no contact details. <button class="btn small" data-unnamed>Remove ${unnamed.count === 1 ? 'it' : 'them'}</button></div>` : ''}
+          ${o.connected ? `<div class="faint small">${o.gmailTotal ? `${plural(o.gmailTotal, 'lead')} created from Gmail so far.` : 'No leads from Gmail yet.'}${o.lastGmailCounts && (o.lastGmailCounts.created || o.lastGmailCounts.updated || o.lastGmailCounts.incomplete) ? ` Last check: ${o.lastGmailCounts.created} new, ${o.lastGmailCounts.updated} added to existing leads${o.lastGmailCounts.incomplete ? `, ${o.lastGmailCounts.incomplete} not imported (no name or contact details)` : ''}.` : ''}</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-sync>Check Gmail now</button><button class="btn danger" data-disconnect>Disconnect</button></div>`
           : o.configured ? `<div><a class="btn primary" href="/api/google/start">Connect Gmail and Google Calendar</a></div>
             <p class="faint small" style="margin:0">Sign in with ${esc(u.email)} and tick every box on Google’s permission page.</p>`
@@ -45,6 +46,7 @@ export async function render(el, { query = {} } = {}) {
           <div class="grid2">
             <label class="field">Gmail label for new leads<input name="gmailLabel" value="${esc(s.gmailLabel)}" required></label>
             <label class="field">Label after importing<input name="gmailDoneLabel" value="${esc(s.gmailDoneLabel)}" required></label>
+            <label class="field">Label for emails not imported<input name="gmailSkippedLabel" value="${esc(s.gmailSkippedLabel || 'CRM Not imported')}" required><span class="plan-hint">No name, or no email or phone number.</span></label>
           </div>
           <label class="field">Your own email domains<input name="ownDomains" value="${esc(s.ownDomains || '')}" placeholder="e.g. parkpilot.uk"><span class="plan-hint">Emails from these addresses are never treated as the lead (your own domain is always included). Separate several with commas.</span></label>
           <label class="check"><input type="checkbox" name="replyTask" ${s.replyTask !== false ? 'checked' : ''}> Add a “Reply to…” task for today for every new email</label>
@@ -106,12 +108,16 @@ export async function render(el, { query = {} } = {}) {
     const r = await post('/api/google/sync');
     const g = r.result.gmail || {};
     if (r.result.error || g.error) toast('Problem: ' + (r.result.error || g.error), { error: true });
-    else toast(g.created || g.updated ? `Gmail checked: ${plural(g.created || 0, 'new lead')}${g.updated ? `, ${g.updated} added to existing leads` : ''}` : `Gmail checked: nothing labelled “${o.gmailLabel}”`);
+    else toast(g.created || g.updated || g.incomplete ? `Gmail checked: ${plural(g.created || 0, 'new lead')}${g.updated ? `, ${g.updated} added to existing leads` : ''}${g.incomplete ? `, ${g.incomplete} not imported (no name or contact details)` : ''}` : `Gmail checked: nothing labelled “${o.gmailLabel}”`);
     render(el);
   });
   el.querySelector('[data-disconnect]')?.addEventListener('click', async () => {
     if (!await confirmBox('Disconnect Google?', 'New emails will stop becoming leads and appointments won’t go into Google Calendar until you connect again. Nothing already in the CRM is removed.', { ok: 'Disconnect', danger: true })) return;
     await post('/api/google/disconnect'); await loadMeta(); toast('Google disconnected'); render(el);
+  });
+  el.querySelector('[data-unnamed]')?.addEventListener('click', async () => {
+    if (!await confirmBox('Remove unnamed leads?', `${plural(unnamed.count, 'lead')} imported from Gmail without a name or contact details, and not worked on since, will be deleted. The emails stay in Gmail.`, { ok: 'Remove', danger: true })) return;
+    const r = await post('/api/google/unnamed/remove'); toast(`${plural(r.removed, 'lead')} removed`); render(el);
   });
   el.querySelector('[data-retry]')?.addEventListener('click', async () => { await post('/api/google/retry'); toast('Trying again'); setTimeout(() => render(el), 2000); });
   if (query.connected) toast('Google connected. Labelled emails will now become leads.');
@@ -123,8 +129,9 @@ export async function render(el, { query = {} } = {}) {
   el.querySelector('[data-form=leads]').addEventListener('submit', async e => {
     e.preventDefault();
     const f = e.target;
-    if (f.gmailLabel.value.trim().toLowerCase() === f.gmailDoneLabel.value.trim().toLowerCase()) { toast('Use two different labels', { error: true }); return; }
-    await api('PUT', '/api/settings', { gmailLabel: f.gmailLabel.value.trim(), gmailDoneLabel: f.gmailDoneLabel.value.trim(), ownDomains: f.ownDomains.value.trim(),
+    const names = [f.gmailLabel, f.gmailDoneLabel, f.gmailSkippedLabel].map(i => i.value.trim().toLowerCase());
+    if (new Set(names).size < 3) { toast('Use three different labels', { error: true }); return; }
+    await api('PUT', '/api/settings', { gmailLabel: f.gmailLabel.value.trim(), gmailDoneLabel: f.gmailDoneLabel.value.trim(), gmailSkippedLabel: f.gmailSkippedLabel.value.trim(), ownDomains: f.ownDomains.value.trim(),
       replyTask: f.replyTask.checked, calendarSync: f.calendarSync.checked });
     await loadMeta(); toast('Lead capture settings saved'); render(el);
   });
@@ -259,7 +266,7 @@ function summarise(j) {
     const d = JSON.parse(j.detail);
     if (j.job === 'import') return `${d.fileName}: ${d.created} new, ${d.updated} updated`;
     if (j.job === 'rollover') return `${d.count} task(s) brought forward`;
-    if (j.job === 'gmail') return `${d.created || 0} new lead(s), ${d.updated || 0} added to existing${d.failed ? `, ${d.failed} failed` : ''}`;
+    if (j.job === 'gmail') return `${d.created || 0} new lead(s), ${d.updated || 0} added to existing${d.incomplete ? `, ${d.incomplete} not imported` : ''}${d.failed ? `, ${d.failed} failed` : ''}`;
     return typeof d === 'string' ? d : '';
   } catch { return j.detail || ''; }
 }

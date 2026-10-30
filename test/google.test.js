@@ -35,7 +35,7 @@ const server = http.createServer((req, res) => {
     if (u.pathname === '/userinfo') return send(200, { email: 'info@parkpilot.test', name: 'Ryan Metcalfe' });
     if (u.pathname === '/gmail/labels' && req.method === 'GET') return send(200, { labels: mock.labels });
     if (u.pathname === '/gmail/labels' && req.method === 'POST') {
-      const l = { id: json.name === 'CRM Leads' ? 'L_SOURCE' : 'L_DONE', name: json.name }; mock.labels.push(l); return send(200, l);
+      const l = { id: { 'CRM Leads': 'L_SOURCE', 'CRM Imported': 'L_DONE', 'CRM Not imported': 'L_SKIP' }[json.name], name: json.name }; mock.labels.push(l); return send(200, l);
     }
     if (u.pathname === '/gmail/messages') {
       const label = u.searchParams.get('labelIds');
@@ -148,7 +148,7 @@ test('connecting creates the two Gmail labels and imports what is already labell
     await G.finishAuth({ code: 'c', state });
   });
   assert.ok(G.isConnected(uid));
-  assert.deepEqual(mock.labels.map(l => l.name).sort(), ['CRM Imported', 'CRM Leads', 'INBOX']);
+  assert.deepEqual(mock.labels.map(l => l.name).sort(), ['CRM Imported', 'CRM Leads', 'CRM Not imported', 'INBOX']);
   const c = D.db.prepare("SELECT * FROM contacts WHERE email = 'sarah@willowlakes.co.uk'").get();
   assert.ok(c, 'lead created');
   assert.equal(c.company, 'Willow Lakes Holiday Park');
@@ -198,6 +198,43 @@ test('an email that was imported but not relabelled (say, a timeout) is never im
   assert.equal(r.skipped, 1);
   assert.equal(D.db.prepare("SELECT COUNT(*) n FROM contacts WHERE email = 'new@lead.example'").get().n, 1);
   assert.deepEqual(mock.messages.get('m4').labelIds, ['L_DONE']);
+});
+
+test('emails with no name or no contact details are not imported; they go to “CRM Not imported”', async () => {
+  // No name anywhere: a generic sender address and no form fields.
+  addMessage('n1', { from: 'enquiries@someplace.example', subject: 'Question', text: 'Do you do discounts?' });
+  // A name but no way to reach them: a form with no email or phone, sent from a no-reply address.
+  addMessage('n2', { from: 'Website <noreply@parkpilot.test>', subject: 'New Book a Demo request', text: 'Name: Ann Other\nPark: Hillside\nMessage: Call me' });
+  // An address that isn't clearly first.last doesn't count as a name.
+  addMessage('n3', { from: 'jsmith83@mail.example', subject: 'Hi', text: 'Interested' });
+  // From someone already in the CRM: still added to their timeline, even without a display name.
+  addMessage('n4', { from: 'dave@sunnysands.example', subject: 'Following up', text: 'Any news?' });
+  const before = D.db.prepare('SELECT COUNT(*) n FROM contacts').get().n;
+  const r = await G.as(uid, () => G.pullLeads());
+  assert.equal(r.incomplete, 3);
+  assert.equal(r.updated, 1);
+  assert.equal(r.created, 0);
+  assert.equal(D.db.prepare('SELECT COUNT(*) n FROM contacts').get().n, before);
+  for (const id of ['n1', 'n2', 'n3']) assert.deepEqual(mock.messages.get(id).labelIds, ['L_SKIP']);
+  assert.deepEqual(mock.messages.get('n4').labelIds, ['L_DONE']);
+  // Relabelled by hand after adding details, it is looked at again (nothing was recorded as done).
+  assert.equal(D.getState('gmail:n1'), null);
+  assert.match(G.status(uid).gmailSkippedLabel, /CRM Not imported/);
+});
+
+test('unnamed leads already imported can be found and removed, leaving worked-on ones alone', () => {
+  const blank = D.insert('contacts', { first_name: '', last_name: '', email: 'x@y.example', lead_source: 'Email', owner_id: uid });
+  D.insert('interactions', { contact_id: blank, type: 'Email', at: '2026-10-29T10:00', summary: 'New enquiry by email' });
+  const noContact = D.insert('contacts', { first_name: 'Only', last_name: 'Name', lead_source: 'Website form', owner_id: uid });
+  const worked = D.insert('contacts', { first_name: '', last_name: '', email: 'w@y.example', lead_source: 'Email', owner_id: uid });
+  D.insert('interactions', { contact_id: worked, type: 'Note', at: '2026-10-29T11:00', summary: 'Spoke to them' });
+  const typed = D.insert('contacts', { first_name: '', last_name: '', company: 'Typed In Park', lead_source: 'Phone', owner_id: uid });
+  assert.equal(G.unnamedLeads(), 2);
+  assert.equal(G.unnamedLeads({ remove: true }), 2);
+  assert.equal(D.get('contacts', blank), null);
+  assert.equal(D.get('contacts', noContact), null);
+  assert.ok(D.get('contacts', worked), 'kept: someone has worked on it');
+  assert.ok(D.get('contacts', typed), 'kept: not from Gmail');
 });
 
 /* ------------------------------------------------------- Google Calendar */

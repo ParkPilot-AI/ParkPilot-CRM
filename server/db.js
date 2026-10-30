@@ -283,6 +283,7 @@ const DEFAULT_SETTINGS = {
   officeLocation: 'At the park',
   gmailLabel: 'CRM Leads',      // put this Gmail label on an email to turn it into a lead
   gmailDoneLabel: 'CRM Imported', // the CRM moves imported emails to this label
+  gmailSkippedLabel: 'CRM Not imported', // emails with no name or contact details go here instead
   ownDomains: '',               // extra email domains that are yours (never treated as a lead)
   replyTask: true,              // add a "Reply to …" task for each new email
   calendarSync: true            // put appointments in your Google Calendar
