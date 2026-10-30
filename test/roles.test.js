@@ -1,12 +1,11 @@
 'use strict';
-// Roles and parks: what sales executives, sales managers and group sales managers can see and do.
+// Roles and teams: what sales executives, sales managers and admins can see and do.
 const os = require('node:os'), path = require('node:path'), fs = require('node:fs');
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'coastfields-roles-'));
-process.env.COASTFIELDS_DATA = dir;
-process.env.OWNER_EMAILS = 'boss@coastfields.test';
-process.env.GRAPH_CLIENT_ID = 'aaaaaaaa-1111-2222-3333-444444444444';
-process.env.GRAPH_CLIENT_SECRET = 'secret-for-tests';
-process.env.GRAPH_TENANT_ID = 'bbbbbbbb-1111-2222-3333-444444444444';
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'parkpilot-roles-'));
+process.env.PARKPILOT_DATA = dir;
+process.env.OWNER_EMAILS = 'boss@parkpilot.test';
+process.env.GOOGLE_CLIENT_ID = '1234-test.apps.googleusercontent.com';
+process.env.GOOGLE_CLIENT_SECRET = 'secret-for-tests';
 process.env.SESSION_SECRET = 'session-secret-for-tests';
 
 const test = require('node:test');
@@ -16,32 +15,32 @@ const auth = require('../server/auth');
 const U = require('../server/util');
 
 const H = { host: 'portal.test', 'x-forwarded-proto': 'https' };
-const cookieFor = email => `cf_session=${encodeURIComponent(auth.seal({ email, name: email.split('@')[0], iat: Date.now(), exp: Date.now() + 864e5 }))}`;
+const cookieFor = email => `pp_session=${encodeURIComponent(auth.seal({ email, name: email.split('@')[0], iat: Date.now(), exp: Date.now() + 864e5 }))}`;
 function as(email) {
   const cookie = cookieFor(email);
   const call = async (method, p, body) => {
     const [pathname, search = ''] = p.split('?');
-    const headers = { ...H, cookie, 'x-coastfields': '1', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) };
+    const headers = { ...H, cookie, 'x-parkpilot': '1', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) };
     const r = await handle({ method, path: pathname, search: search ? '?' + search : '', headers, body: body === undefined ? null : Buffer.from(JSON.stringify(body)) });
     let json = null; try { json = JSON.parse(r.body); } catch { /* not JSON */ }
     return { status: r.status, json };
   };
   return { get: p => call('GET', p), post: (p, b = {}) => call('POST', p, b), patch: (p, b) => call('PATCH', p, b), put: (p, b) => call('PUT', p, b) };
 }
-const boss = as('boss@coastfields.test'), mia = as('mia@coastfields.test'), max = as('max@coastfields.test');
-const ed = as('ed@coastfields.test'), eve = as('eve@coastfields.test'), zed = as('zed@coastfields.test');
+const boss = as('boss@parkpilot.test'), mia = as('mia@parkpilot.test'), max = as('max@parkpilot.test');
+const ed = as('ed@parkpilot.test'), eve = as('eve@parkpilot.test'), zed = as('zed@parkpilot.test');
 const ids = {};
 
-test('the owner signs in as group sales manager and sets up parks and people', async () => {
+test('the owner signs in as admin and sets up teams and people', async () => {
   const me = await boss.get('/api/meta');
   assert.equal(me.status, 200);
   assert.equal(me.json.user.role, 'group');
-  assert.equal(me.json.parks[0].name, 'Coastfields');
+  assert.equal(me.json.parks[0].name, 'ParkPilot');
   const p2 = await boss.post('/api/parks', { name: 'Seaview' });
   assert.equal(p2.status, 200);
   ids.p1 = me.json.parks[0].id; ids.p2 = p2.json.id;
-  for (const [k, email, role, park] of [['mia', 'mia@coastfields.test', 'manager', ids.p1], ['max', 'max@coastfields.test', 'manager', ids.p2],
-    ['ed', 'ed@coastfields.test', 'exec', ids.p1], ['eve', 'eve@coastfields.test', 'exec', ids.p1], ['zed', 'zed@coastfields.test', 'exec', ids.p2]]) {
+  for (const [k, email, role, park] of [['mia', 'mia@parkpilot.test', 'manager', ids.p1], ['max', 'max@parkpilot.test', 'manager', ids.p2],
+    ['ed', 'ed@parkpilot.test', 'exec', ids.p1], ['eve', 'eve@parkpilot.test', 'exec', ids.p1], ['zed', 'zed@parkpilot.test', 'exec', ids.p2]]) {
     const r = await boss.post('/api/users', { email, name: k, role, park_id: park });
     assert.equal(r.status, 200, JSON.stringify(r.json));
     ids[k] = r.json.id;
@@ -53,7 +52,7 @@ test('the owner signs in as group sales manager and sets up parks and people', a
 });
 
 test('people not on the team can’t get in', async () => {
-  const r = await as('stranger@coastfields.test').get('/api/meta');
+  const r = await as('stranger@parkpilot.test').get('/api/meta');
   assert.equal(r.status, 403);
   assert.ok(r.json.noAccess);
 });
@@ -88,7 +87,7 @@ test('a sales executive sees only their own leads', async () => {
   ids.c3 = c.id;
 });
 
-test('executives can’t reach the deeper settings, the team or the Captain’s Log', async () => {
+test('executives can’t reach the deeper settings, the team or the Overview', async () => {
   assert.equal((await ed.put('/api/settings', { bufferMinutes: 0 })).status, 403);
   assert.equal((await ed.get('/api/team')).status, 403);
   assert.equal((await ed.get('/api/captains-log')).status, 403);
@@ -96,16 +95,16 @@ test('executives can’t reach the deeper settings, the team or the Captain’s 
   assert.equal((await ed.get('/api/duplicates')).status, 403);
   assert.equal((await ed.get('/api/export/contacts.csv')).status, 403);
   assert.equal((await mia.get('/api/backup')).status, 403);
-  // …but can see and connect their own Outlook.
+  // …but can see and connect their own Google account.
   const s = await ed.get('/api/settings');
   assert.equal(s.status, 200);
-  assert.equal(s.json.outlook.connected, false);
+  assert.equal(s.json.google.connected, false);
   assert.equal((await mia.put('/api/settings', { bufferMinutes: 10 })).status, 200);
 });
 
 test('work goes in the right diary; managers can see their team’s, others can’t', async () => {
   const day = U.addDays(U.today(), 2);
-  const a = await ed.post('/api/appointments', { type: 'Park tour', start: `${day}T10:00`, contact_id: ids.c1 });
+  const a = await ed.post('/api/appointments', { type: 'Demo', start: `${day}T10:00`, contact_id: ids.c1 });
   assert.equal(a.status, 200);
   assert.equal(a.json.owner_id, ids.ed);
   assert.equal((await ed.get(`/api/appointments?from=${day}&to=${day}`)).json.appts.length, 1);
@@ -116,17 +115,18 @@ test('work goes in the right diary; managers can see their team’s, others can�
   // An exec can't give work to someone else.
   assert.equal((await ed.post('/api/tasks', { title: 'x', owner_id: ids.eve })).status, 403);
   // A manager can book into an exec's diary.
-  const b = await mia.post('/api/appointments', { type: 'Phone call', start: `${day}T14:00`, contact_id: ids.c1, owner_id: ids.ed });
+  const b = await mia.post('/api/appointments', { type: 'Discovery call', start: `${day}T14:00`, contact_id: ids.c1, owner_id: ids.ed });
   assert.equal(b.json.owner_id, ids.ed);
-  // The booked tour moved the deal on and created prep/follow-up tasks for Ed.
+  // The booked demo moved the deal on and created prep/follow-up tasks for Ed.
   const tasks = (await ed.get('/api/tasks')).json;
-  assert.ok(tasks.some(t => /Prepare for park tour/.test(t.title)));
+  assert.ok(tasks.some(t => /Prepare for demo/.test(t.title)));
+  assert.equal((await ed.get(`/api/contacts/${ids.c1}`)).json.deals[0].stage, 'Demo booked');
   ids.appt = a.json.id;
 });
 
 test('a sales manager can add executives at their park, not managers or people elsewhere', async () => {
-  assert.equal((await mia.post('/api/users', { email: 'boss2@coastfields.test', role: 'manager' })).status, 403);
-  const r = await mia.post('/api/users', { email: 'new@coastfields.test', name: 'New', role: 'exec', park_id: ids.p2 });
+  assert.equal((await mia.post('/api/users', { email: 'boss2@parkpilot.test', role: 'manager' })).status, 403);
+  const r = await mia.post('/api/users', { email: 'new@parkpilot.test', name: 'New', role: 'exec', park_id: ids.p2 });
   assert.equal(r.status, 200);
   assert.equal(r.json.park_id, ids.p1, 'always their own park');
   assert.equal((await mia.patch(`/api/users/${ids.zed}`, { name: 'Z' })).status, 403);
@@ -137,7 +137,7 @@ test('a sales manager can add executives at their park, not managers or people e
   assert.equal((await mia.post('/api/parks', { name: 'Mine' })).status, 403);
 });
 
-test('the Captain’s Log: managers see their park, group managers compare parks', async () => {
+test('the Overview: managers see their team, admins compare teams', async () => {
   const log = (await mia.get('/api/captains-log?period=30')).json;
   assert.equal(log.park.id, ids.p1);
   const edRow = log.team.find(p => p.id === ids.ed);
@@ -147,7 +147,7 @@ test('the Captain’s Log: managers see their park, group managers compare parks
   assert.equal(log.todayAppts.length, 0);
   assert.equal((await mia.get(`/api/captains-log?park=${ids.p2}`)).json.park.id, ids.p1, 'a manager can’t switch park');
   const all = (await boss.get('/api/captains-log?period=30')).json;
-  assert.deepEqual(all.parks.map(p => p.name).sort(), ['Coastfields', 'Seaview']);
+  assert.deepEqual(all.parks.map(p => p.name).sort(), ['ParkPilot', 'Seaview']);
   assert.equal(all.parks.find(p => p.id === ids.p2).unallocated, 1);
   const sea = (await boss.get(`/api/captains-log?period=30&park=${ids.p2}`)).json;
   assert.equal(sea.unallocated.length, 1);
@@ -166,12 +166,10 @@ test('removing someone hands their leads and open tasks to a colleague', async (
   assert.equal((await mia.get(`/api/appointments/${ids.appt}`)).status, 200);
 });
 
-test('homes and plots belong to a park', async () => {
-  const h = await mia.post('/api/homes', { make: 'Willerby', model: 'Sierra', price: 60000, park_id: ids.p2 });
-  assert.equal(h.json.park_id, ids.p1);
-  assert.equal((await max.get('/api/homes')).json.length, 0);
-  assert.equal((await zed.patch(`/api/homes/${h.json.id}`, { price: 1 })).status, 404);
-  assert.equal((await boss.get('/api/homes')).json.length, 1);
+test('only admins can download a backup or add teams', async () => {
+  assert.equal((await boss.get('/api/backup')).status, 200);
+  assert.equal((await mia.get('/api/backup')).status, 403);
+  assert.equal((await mia.post('/api/parks', { name: 'Another' })).status, 403);
 });
 
 test.after(() => { fs.rmSync(dir, { recursive: true, force: true }); });

@@ -1,6 +1,6 @@
 'use strict';
 // Database layer: SQLite compiled to WebAssembly (sql.js), held in memory and persisted
-// as one file by store.js (an Azure blob in production). `db` keeps the same small API the
+// as one file by store.js (a Netlify Blobs entry in production). `db` keeps the same small API the
 // rest of the code uses: db.prepare(sql).run/get/all(...args) and db.exec(sql).
 const initSqlJs = require('sql.js');
 const { nowStamp } = require('./util');
@@ -60,31 +60,33 @@ function migrate() {
   if (!cols('deals').includes('payment_status')) current.exec('ALTER TABLE deals ADD COLUMN payment_status TEXT');
   // The furthest stage a deal has reached (kept when it is lost), used to draw the sales funnel.
   if (!cols('deals').includes('furthest_stage')) current.exec('ALTER TABLE deals ADD COLUMN furthest_stage TEXT');
-  // October 2026: pipeline became Enquiry > Appointment > Park Tour > Finance & Paperwork > Siting & Handover.
-  current.exec(`UPDATE deals SET stage = CASE stage
-      WHEN 'Viewing booked' THEN 'Appointment' WHEN 'Viewed' THEN 'Park Tour' WHEN 'Proposal' THEN 'Park Tour'
-      WHEN 'Reserved' THEN 'Finance & Paperwork' WHEN 'Finance and paperwork' THEN 'Finance & Paperwork'
-      WHEN 'Siting and handover' THEN 'Siting & Handover' ELSE stage END
-    WHERE stage IN ('Viewing booked','Viewed','Proposal','Reserved','Finance and paperwork','Siting and handover')`);
-  current.exec("UPDATE appointments SET type = 'Park tour' WHERE type = 'Viewing'");
+  // ParkPilot pipeline: Enquiry > Demo booked > Demo held > Proposal sent > Won (or Lost).
+  // Databases started from the holiday-home portal are mapped across.
+  const stageMap = `CASE %s WHEN 'Appointment' THEN 'Demo booked' WHEN 'Viewing booked' THEN 'Demo booked'
+      WHEN 'Park Tour' THEN 'Demo held' WHEN 'Viewed' THEN 'Demo held' WHEN 'Proposal' THEN 'Proposal sent'
+      WHEN 'Finance & Paperwork' THEN 'Proposal sent' WHEN 'Reserved' THEN 'Proposal sent' WHEN 'Siting & Handover' THEN 'Proposal sent'
+      WHEN 'Completed' THEN 'Won' ELSE %s END`;
+  const oldStages = "('Appointment','Viewing booked','Park Tour','Viewed','Proposal','Finance & Paperwork','Reserved','Siting & Handover','Completed')";
+  current.exec(`UPDATE deals SET stage = ${stageMap.replace(/%s/g, 'stage')} WHERE stage IN ${oldStages}`);
+  current.exec(`UPDATE deals SET furthest_stage = ${stageMap.replace(/%s/g, 'furthest_stage')} WHERE furthest_stage IN ${oldStages}`);
+  current.exec(`UPDATE appointments SET type = CASE type WHEN 'Park tour' THEN 'Demo' WHEN 'Viewing' THEN 'Demo' WHEN 'Teams call' THEN 'Demo'
+      WHEN 'Phone call' THEN 'Discovery call' WHEN 'Handover' THEN 'Onboarding call' ELSE 'Site visit' END
+    WHERE type IN ('Park tour','Viewing','Teams call','Phone call','Handover','Part-ex valuation','Finance meeting')`);
   current.exec("UPDATE deals SET furthest_stage = stage WHERE furthest_stage IS NULL AND stage <> 'Lost'");
-  const r = current.exec("SELECT value FROM settings WHERE key = 'durations'");
-  if (r.length) {
-    try {
-      const d = JSON.parse(r[0].values[0][0]);
-      if (d.Viewing !== undefined && d['Park tour'] === undefined) {
-        d['Park tour'] = Math.max(d.Viewing, 90); delete d.Viewing;
-        const st = current.prepare("UPDATE settings SET value = ? WHERE key = 'durations'"); st.run([JSON.stringify(d)]); st.free();
-      }
-    } catch { /* leave a malformed setting alone */ }
-  }
+  current.exec("UPDATE contacts SET type = 'Customer' WHERE type = 'Owner'");
+  current.exec("DELETE FROM settings WHERE key IN ('durations','todoMirror','officeLocation') AND value LIKE '%Park tour%'");
   const add = (t, c, def) => { if (!cols(t).includes(c)) current.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${def}`); };
-  // October 2026: several parks and a sales team. Leads belong to a park and (once allocated) to a person.
+  // A sales team ("parks" in the code are sales teams). Leads belong to a team and, once allocated, to a person.
   add('contacts', 'park_id', 'INTEGER'); add('contacts', 'owner_id', 'INTEGER'); add('contacts', 'assigned_at', 'TEXT');
   add('tasks', 'owner_id', 'INTEGER'); add('tasks', 'todo_user_id', 'INTEGER');
   add('appointments', 'owner_id', 'INTEGER'); add('outlook_events', 'user_id', 'INTEGER');
   add('homes', 'park_id', 'INTEGER'); add('plots', 'park_id', 'INTEGER');
   add('deals', 'reserved_at', 'TEXT'); add('deals', 'completed_at', 'TEXT');
+  // ParkPilot: who the lead is (a park operator) and what they might buy.
+  for (const c of ['company', 'job_title', 'region', 'website', 'interest', 'current_systems']) add('contacts', c, 'TEXT');
+  add('contacts', 'units', 'INTEGER'); add('contacts', 'sites', 'INTEGER');
+  add('deals', 'plan', 'TEXT'); add('deals', 'billing', 'TEXT'); add('deals', 'sites', 'INTEGER'); add('deals', 'expected_close', 'TEXT');
+  add('interactions', 'link', 'TEXT');
   current.exec(`CREATE INDEX IF NOT EXISTS ix_contacts_owner ON contacts(owner_id);
     CREATE INDEX IF NOT EXISTS ix_contacts_park ON contacts(park_id, owner_id);
     CREATE INDEX IF NOT EXISTS ix_tasks_owner ON tasks(owner_id, status, due_date);
@@ -92,22 +94,22 @@ function migrate() {
     CREATE INDEX IF NOT EXISTS ix_oe_user ON outlook_events(user_id, start);`);
   if (!current.exec('SELECT 1 FROM parks LIMIT 1').length) {
     const t = nowStamp();
-    const st = current.prepare('INSERT INTO parks(name, created_at, updated_at) VALUES(?, ?, ?)'); st.run(['Coastfields', t, t]); st.free();
+    const st = current.prepare('INSERT INTO parks(name, created_at, updated_at) VALUES(?, ?, ?)'); st.run(['ParkPilot', t, t]); st.free();
   }
   for (const t of ['contacts', 'homes', 'plots']) current.exec(`UPDATE ${t} SET park_id = (SELECT MIN(id) FROM parks) WHERE park_id IS NULL`);
-  // When a deal was first reserved (deposit or payment) and completed, for the Captain's Log.
+  // reserved_at: when a proposal first went out; completed_at: when the deal was won.
   current.exec(`UPDATE deals SET reserved_at = COALESCE(stage_changed_at, updated_at) WHERE reserved_at IS NULL
-                AND furthest_stage IN ('Finance & Paperwork','Siting & Handover','Completed')`);
-  current.exec("UPDATE deals SET completed_at = COALESCE(stage_changed_at, updated_at) WHERE completed_at IS NULL AND stage = 'Completed'");
+                AND furthest_stage IN ('Proposal sent','Won')`);
+  current.exec("UPDATE deals SET completed_at = COALESCE(stage_changed_at, updated_at) WHERE completed_at IS NULL AND stage = 'Won'");
   leadNumbers();
 }
 
-// Every lead has its own lead number. Leads imported from the previous CRM keep theirs (L000010949…);
-// leads added in the portal get the next CF number (CF000001, CF000002, …), a separate series so they
-// can never clash with numbers the old system issues. Numbers carry on from the highest ever issued,
+// Every lead has its own lead number. Leads imported from another system keep theirs;
+// leads added here get the next PP number (PP000001, PP000002, …), a separate series so they
+// can never clash with imported numbers. Numbers carry on from the highest ever issued,
 // so one is never reused even after a lead is deleted. The database refuses duplicates, and triggers
 // number any lead added without one, whichever way it arrives (typed in, imported, created from a search).
-const LEAD_RE = "GLOB 'CF[0-9]*'";
+const LEAD_RE = "GLOB 'PP[0-9]*'";
 function leadNumbers() {
   const one = sql => { const r = current.exec(sql); return r.length ? r[0].values[0][0] : null; };
   const run = (sql, args = []) => { const st = current.prepare(sql); try { st.run(args); } finally { st.free(); } };
@@ -134,13 +136,13 @@ function leadNumbers() {
   const missing = current.exec('SELECT id FROM contacts WHERE lead_no IS NULL ORDER BY COALESCE(enquiry_date, created_at), id');
   for (const [id] of missing.length ? missing[0].values : []) {
     run("UPDATE counters SET value = value + 1 WHERE name = 'lead_no'");
-    run("UPDATE contacts SET lead_no = 'CF' || printf('%06d', (SELECT value FROM counters WHERE name = 'lead_no')) WHERE id = ?", [id]);
+    run("UPDATE contacts SET lead_no = 'PP' || printf('%06d', (SELECT value FROM counters WHERE name = 'lead_no')) WHERE id = ?", [id]);
   }
   current.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_contacts_lead_no ON contacts(lead_no);
     CREATE TRIGGER IF NOT EXISTS trg_lead_no_issue AFTER INSERT ON contacts WHEN NEW.lead_no IS NULL OR trim(NEW.lead_no) = ''
     BEGIN
       UPDATE counters SET value = value + 1 WHERE name = 'lead_no';
-      UPDATE contacts SET lead_no = 'CF' || printf('%06d', (SELECT value FROM counters WHERE name = 'lead_no')) WHERE id = NEW.id;
+      UPDATE contacts SET lead_no = 'PP' || printf('%06d', (SELECT value FROM counters WHERE name = 'lead_no')) WHERE id = NEW.id;
     END;
     CREATE TRIGGER IF NOT EXISTS trg_lead_no_seen_insert AFTER INSERT ON contacts WHEN NEW.lead_no ${LEAD_RE}
     BEGIN UPDATE counters SET value = MAX(value, CAST(substr(NEW.lead_no, 3) AS INTEGER)) WHERE name = 'lead_no'; END;
@@ -269,17 +271,22 @@ CREATE TABLE IF NOT EXISTS job_log (id INTEGER PRIMARY KEY, job TEXT, at TEXT, d
 `;
 
 const DEFAULT_SETTINGS = {
-  openingHours: { start: '09:00', end: '17:00' },
-  closedDays: [],            // 0 = Sun … 6 = Sat; none closed by default
-  durations: { 'Park tour': 90, 'Part-ex valuation': 45, 'Finance meeting': 45, 'Handover': 90, 'Phone call': 15, 'Teams call': 30 },
+  openingHours: { start: '09:00', end: '17:30' },
+  closedDays: [0, 6],        // 0 = Sun … 6 = Sat; weekends closed by default
+  durations: { 'Demo': 30, 'Discovery call': 15, 'Follow-up call': 15, 'Site visit': 90, 'Onboarding call': 45 },
   bufferMinutes: 15,
   escalateAfter: 3,
   reviewAfter: 5,
   rolloverTime: '02:15',
   activeLeadDays: 90,
-  todoMirror: true,
   funnelPeriod: '90',
-  officeLocation: 'Sales office'
+  officeLocation: 'At the park',
+  gmailLabel: 'CRM Leads',      // put this Gmail label on an email to turn it into a lead
+  gmailDoneLabel: 'CRM Imported', // the CRM moves imported emails to this label
+  gmailSkippedLabel: 'CRM Not imported', // emails with no name or contact details go here instead
+  ownDomains: '',               // extra email domains that are yours (never treated as a lead)
+  replyTask: true,              // add a "Reply to …" task for each new email
+  calendarSync: true            // put appointments in your Google Calendar
 };
 
 function getSettings() {

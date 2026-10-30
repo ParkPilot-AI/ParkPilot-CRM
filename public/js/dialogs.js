@@ -1,5 +1,5 @@
 import { state, api, get, post, patch, del, esc, modal, formData, contactPicker, options, toast, changed, fmtWhen, fmtDate, fmtDay, fmtTime,
-  today, addDays, nowLocal, fullName, money, icon, confirmBox, minutes, hhmm, me, isMgr, isGroupMgr, teamOptions, parkOptions, personName, plural } from './core.js';
+  today, addDays, nowLocal, fullName, money, icon, confirmBox, minutes, hhmm, me, isMgr, isGroupMgr, teamOptions, parkOptions, personName, plural, plans } from './core.js';
 
 const M = () => state.meta;
 
@@ -11,7 +11,7 @@ export function taskDialog({ task = null, contact = null, dealId = null, due } =
   modal({
     title: task ? 'Edit task' : 'New task',
     body: `
-      <label class="field">What needs doing<input name="title" required value="${esc(t.title || '')}" autofocus placeholder="e.g. Call back about plot 42"></label>
+      <label class="field">What needs doing<input name="title" required value="${esc(t.title || '')}" autofocus placeholder="e.g. Send proposal to Willow Lakes"></label>
       <div class="grid2">
         <div class="field"><span>Category</span><div class="chips" data-chips="category">${m.categories.map(c => `<button type="button" class="chip${(t.category || 'Follow-up') === c ? ' on' : ''}" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div><input type="hidden" name="category" value="${esc(t.category || 'Follow-up')}"></div>
         <div class="field"><span>Priority</span><div class="chips" data-chips="priority">${m.priorities.map(c => `<button type="button" class="chip${(t.priority || 'Medium') === c ? ' on' : ''}" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div><input type="hidden" name="priority" value="${esc(t.priority || 'Medium')}"></div>
@@ -58,7 +58,7 @@ function bindChips(root, form) {
 
 /* ------------------------------------------------------------- booking */
 
-export function bookDialog({ contact = null, dealId = null, start = null, type = 'Park tour', title = '', notes = '', appt = null, ownerId = null } = {}) {
+export function bookDialog({ contact = null, dealId = null, start = null, type = 'Demo', title = '', notes = '', appt = null, ownerId = null } = {}) {
   const m = M();
   const s = m.settings;
   const editing = !!appt;
@@ -88,11 +88,11 @@ export function bookDialog({ contact = null, dealId = null, start = null, type =
         <label class="field">Title<input name="title" value="${esc(appt ? appt.title : title)}" placeholder="Filled in automatically"></label>
       </div>
       <div style="display:flex;gap:22px;flex-wrap:wrap">
-        <label class="check"><input type="checkbox" name="is_remote" ${appt ? (appt.is_remote ? 'checked' : '') : t0 === 'Teams call' ? 'checked' : ''}> Microsoft Teams meeting</label>
+        <label class="check"><input type="checkbox" name="is_remote" ${appt ? (appt.is_remote ? 'checked' : '') : m.remoteTypes.includes(t0) ? 'checked' : ''}> Google Meet video call</label>
         ${editing ? '' : `<label class="check"><input type="checkbox" name="send_invite" checked> Email an invite to the customer</label>`}
       </div>
       <div data-invite-note class="faint small"></div>
-      <label class="field">Notes for the appointment<textarea name="notes" rows="2" placeholder="Homes to show, what to bring, anything to prepare">${esc(appt ? appt.notes || '' : notes)}</textarea></label>`,
+      <label class="field">Notes for the appointment<textarea name="notes" rows="2" placeholder="What to show, who will join from the park, anything to prepare">${esc(appt ? appt.notes || '' : notes)}</textarea></label>`,
     foot: `${editing ? `<button type="button" class="btn danger" data-cancel-appt>Cancel appointment</button><div class="spacer"></div>` : ''}<button class="btn" data-close>Close</button><button class="btn primary" type="submit">${editing ? 'Save changes' : 'Book'}</button>`,
     onMount(root, close, form) {
       bindChips(root, form);
@@ -103,8 +103,8 @@ export function bookDialog({ contact = null, dealId = null, start = null, type =
         if (!editing && form.send_invite && form.send_invite.checked) {
           if (!currentContact) out.push('Choose a customer to send an invite.');
           else if (!currentContact.email) out.push('No email address on file, so no invite will be sent.');
-          else if (form.owner_id && Number(form.owner_id.value) !== me().id) out.push(`The invite is sent from ${personName(form.owner_id.value)}’s Outlook if they have connected it.`);
-          else if (!m.outlook.connected) out.push('Connect Outlook in Settings to send invites; it will be saved in the diary meanwhile.');
+          else if (form.owner_id && Number(form.owner_id.value) !== me().id) out.push(`The invite is sent from ${personName(form.owner_id.value)}’s Google Calendar if they have connected Google.`);
+          else if (!m.google.connected) out.push('Connect Google in Settings to send invites; it will be saved in the diary meanwhile.');
         }
         inviteNote.textContent = out.join(' ');
       };
@@ -132,8 +132,7 @@ export function bookDialog({ contact = null, dealId = null, start = null, type =
       form.type.addEventListener('change', () => {
         const ty = form.type.value;
         form.duration.value = durOf(ty);
-        if (ty === 'Teams call') form.is_remote.checked = true;
-        if (ty === 'Park tour' || ty === 'Handover' || ty === 'Part-ex valuation') form.is_remote.checked = false;
+        form.is_remote.checked = m.remoteTypes.includes(ty);
         loadSlots();
       });
       root.querySelector('[data-custom]').onclick = () => { custom = true; root.querySelector('[data-slots]').classList.add('hidden'); root.querySelector('[data-customrow]').classList.remove('hidden'); if (chosen) { form.date.value = chosen.start.slice(0, 10); form.time.value = chosen.start.slice(11, 16); } form.date.focus(); };
@@ -163,7 +162,7 @@ export function bookDialog({ contact = null, dealId = null, start = null, type =
         const a = await post('/api/appointments', payload);
         close();
         const mine = !payload.owner_id || payload.owner_id === me().id;
-        const invited = d.send_invite && currentContact && currentContact.email && mine && m.outlook.connected;
+        const invited = d.send_invite && currentContact && currentContact.email && mine && m.google.connected;
         toast(`${a.type} booked for ${fmtWhen(a.start)}${mine ? '' : ` in ${personName(payload.owner_id)}’s diary`}${invited ? '. Invite on its way.' : ''}`);
         changed();
       });
@@ -175,8 +174,8 @@ export function cancelDialog(appt) {
   modal({
     title: `Cancel ${appt.type.toLowerCase()}?`,
     body: `<p style="margin:0">${esc(appt.title)}, ${esc(fmtWhen(appt.start))}.</p>
-      <label class="field">Message for the customer (optional)<textarea name="message" rows="2" placeholder="Sorry, we need to rearrange. I'll call you to find a new time."></textarea></label>
-      ${appt.type === 'Park tour' ? '<div class="faint small">A “Rebook” task will be added to today’s list.</div>' : ''}`,
+      <label class="field">Message for the customer (optional)<textarea name="message" rows="2" placeholder="Sorry, we need to rearrange. I’ll call you to find a new time."></textarea></label>
+      ${M().tourTypes.includes(appt.type) ? '<div class="faint small">A “Rebook” task will be added to today’s list.</div>' : ''}`,
     foot: `<button class="btn" data-close>Keep it</button><button class="btn danger solid" type="submit">Cancel appointment</button>`,
     onMount(root, close, form) {
       form.addEventListener('submit', async e => { e.preventDefault(); await post(`/api/appointments/${appt.id}/cancel`, { message: form.message.value }); close(); toast('Appointment cancelled'); changed(); });
@@ -194,9 +193,10 @@ export async function apptDialog(id) {
         <div><b>${esc(fmtDate(a.start, { long: true }))}</b>, ${esc(fmtTime(a.start))} – ${esc(fmtTime(a.end))}</div>
         <div class="muted">${esc(a.type)}${a.location ? ', ' + esc(a.location) : ''}</div>
         ${a.contact_id ? `<div style="margin-top:6px"><a href="#/contacts/${a.contact_id}" data-close-nav>${esc(fullName(a))}</a>${a.mobile ? ` · <a href="tel:${esc(a.mobile)}">${esc(a.mobile)}</a>` : ''}</div>` : ''}
-        ${a.teams_url ? `<div style="margin-top:8px"><a class="btn small primary" href="${esc(a.teams_url)}" target="_blank" rel="noopener">${icon('video')} Join Teams meeting</a></div>` : ''}
+        ${a.contact_id && a.company ? `<div class="muted small">${esc(a.company)}${a.units ? ` · ${esc(a.units)} units` : ''}</div>` : ''}
+        ${a.teams_url ? `<div style="margin-top:8px"><a class="btn small primary" href="${esc(a.teams_url)}" target="_blank" rel="noopener">${icon('video')} Join Google Meet</a></div>` : ''}
       </div>
-      ${a.needs_review ? `<div class="callout warn">This was found in Outlook and linked to ${esc(fullName(a))} automatically. <button type="button" class="btn small" data-confirm>Link is right</button></div>` : ''}
+      ${a.needs_review ? `<div class="callout warn">This was linked to ${esc(fullName(a))} automatically. <button type="button" class="btn small" data-confirm>Link is right</button></div>` : ''}
       ${a.conflict_note ? `<div class="callout warn">${esc(a.conflict_note)} <button type="button" class="btn small" data-confirm>OK</button></div>` : ''}
       ${a.status === 'Cancelled' ? '<div class="callout warn">This appointment was cancelled.</div>' : ''}
       ${a.outcome ? `<div><b>Outcome:</b> ${esc(a.outcome)}</div>` : ''}
@@ -215,24 +215,22 @@ export async function apptDialog(id) {
 }
 
 export function syncLabel(a) {
-  return ({ Synced: 'In your Outlook calendar', Pending: 'Sending to Outlook…', Error: `Not in Outlook yet: ${a.sync_error || 'sync error'}`, Local: 'Saved in the portal only (Outlook not connected)' })[a.sync_status] || '';
+  return ({ Synced: 'In your Google Calendar', Pending: 'Sending to Google Calendar…', Error: `Not in Google Calendar yet: ${a.sync_error || 'sync error'}`, Local: 'Saved in the CRM only (Google not connected)' })[a.sync_status] || '';
 }
 
 export function outcomeDialog(a) {
-  if (a.type === 'Park tour') return parkTourOutcomeDialog(a);
+  if (M().tourTypes.includes(a.type)) return demoOutcomeDialog(a);
   const presets = {
-    'Part-ex valuation': ['Valuation given', 'Thinking it over', 'Accepted part-ex offer', 'Declined'],
-    'Finance meeting': ['Application submitted', 'Approved', 'Declined', 'Needs more documents'],
-    'Handover': ['Keys handed over', 'Snags to fix', 'Rearranged'],
-    'Phone call': ['Spoke – interested', 'Spoke – not now', 'No answer'],
-    'Teams call': ['Spoke – interested', 'Spoke – not now', 'Did not join']
+    'Discovery call': ['Interested – book a demo', 'Not right now', 'No answer', 'Not a fit'],
+    'Follow-up call': ['Ready to go ahead', 'Needs more time', 'Questions answered', 'No answer'],
+    'Onboarding call': ['Kick-off done', 'Set-up agreed', 'Gone live', 'Follow-up needed']
   }[a.type] || ['Done'];
   const m = M();
   modal({
     title: `How did the ${a.type.toLowerCase()} go?`,
     body: `
       <div class="chips" data-presets>${presets.map(p => `<button type="button" class="chip" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>
-      <label class="field">Outcome<input name="outcome" required value="${esc(a.outcome || '')}" placeholder="e.g. Loved plot 42, wants prices"></label>
+      <label class="field">Outcome<input name="outcome" required value="${esc(a.outcome || '')}" placeholder="e.g. Keen on the Sales Agent, wants pricing for 2 parks"></label>
       <label class="field">Notes (optional)<textarea name="notes" rows="3"></textarea></label>
       ${a.deal_id ? `<label class="field">Move the deal to<select name="nextStage">${options(m.stages, '', { blank: 'Leave as it is (or move on automatically)' })}</select></label>` : ''}`,
     foot: `<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save outcome</button>`,
@@ -250,67 +248,70 @@ export function outcomeDialog(a) {
   });
 }
 
-// The park tour is the full presentation: quote, deposit or payment, and agreed next steps.
-// Recording it moves the deal to Park Tour (and on to Finance & Paperwork if money was taken),
-// or closes it as Lost if the park wasn't right for the customer.
-export async function parkTourOutcomeDialog(a) {
+// A demo (or site visit) is where the deal is shaped: what they'd buy, at what monthly price, and
+// what happens next. Recording it moves the deal to Demo held (or Proposal sent if one went out),
+// or closes it as Lost if ParkPilot isn't a fit.
+export function demoOutcomeDialog(a) {
   const m = M();
-  const homes = (await get('/api/homes')).filter(h => ['Available', 'Reserved', 'Part-ex in'].includes(h.status) || h.id === a.home_id);
   const results = [
-    { v: 'presented', label: 'Presentation given', text: 'Presentation given' },
-    { v: 'not_right', label: 'Park not right for them', text: 'Park not right for customer' },
+    { v: 'held', label: `${a.type} held`, text: `${a.type} held` },
+    { v: 'not_fit', label: 'Not a fit', text: 'Not a fit' },
     { v: 'no_show', label: 'Did not attend', text: 'Did not attend' }
   ];
+  const product0 = a.deal_product && a.deal_product !== 'Not decided yet' ? a.deal_product : 'ParkPilot AI';
   modal({
-    title: 'Record the park tour',
+    title: `Record the ${a.type.toLowerCase()}`,
     wide: true,
     body: `
-      <div class="field"><span>How did it go?</span><div class="chips" data-chips="result">${results.map((r, i) => `<button type="button" class="chip${i === 0 ? ' on' : ''}" data-v="${r.v}">${esc(r.label)}</button>`).join('')}</div><input type="hidden" name="result" value="presented"></div>
-      <div data-presented style="display:flex;flex-direction:column;gap:14px">
-        <div class="grid2">
-          <label class="field">Holiday home quoted<select name="home_id">${options(homes.map(h => ({ value: h.id, label: `${[h.year, h.make, h.model].filter(Boolean).join(' ')}${h.price ? ' – ' + money(h.price) : ''}` })), a.home_id, { blank: homes.length ? 'Choose a home (optional)' : 'No stock added yet' })}</select></label>
-          <label class="field">Quote (£)<input type="number" name="quote_price" step="100" min="0" data-num placeholder="e.g. 54995"></label>
+      <div class="field"><span>How did it go?</span><div class="chips" data-chips="result">${results.map((r, i) => `<button type="button" class="chip${i === 0 ? ' on' : ''}" data-v="${r.v}">${esc(r.label)}</button>`).join('')}</div><input type="hidden" name="result" value="held"></div>
+      <div data-held style="display:flex;flex-direction:column;gap:14px">
+        <div class="grid3">
+          <label class="field">Interested in<select name="product">${options(m.products, product0)}</select></label>
+          <label class="field">Plan<select name="plan"></select></label>
+          <label class="field">Monthly price (£)<input type="number" name="monthly" step="1" min="0" data-num value="${esc(a.deal_price ?? '')}"><span class="plan-hint" data-hint></span></label>
         </div>
-        <div class="field"><span>Payment taken</span><div class="chips" data-chips="payment_type">${m.paymentStatuses.map((p, i) => `<button type="button" class="chip${i === 0 ? ' on' : ''}" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div><input type="hidden" name="payment_type" value="${esc(m.paymentStatuses[0])}"></div>
-        <label class="field hidden" data-amount>Amount taken (£)<input type="number" name="payment_amount" step="50" min="0" data-num></label>
+        <label class="check"><input type="checkbox" name="proposal_sent"> Proposal already sent</label>
         <div class="grid2">
-          <label class="field">Next steps agreed<input name="next_steps" placeholder="e.g. Send finance application; call Friday to confirm plot"></label>
+          <label class="field">Next step agreed<input name="next_steps" placeholder="e.g. Send proposal and the Mayville case study"></label>
           <label class="field">By when<input type="date" name="next_step_date" value="${addDays(today(), 2)}"></label>
         </div>
       </div>
-      <div data-notright class="callout warn hidden">The deal will be closed as <b>Lost</b> with the reason “Park not right for customer”.</div>
-      <div data-noshow class="callout hidden">The tour will be marked as not attended and a “Rebook park tour” call added to today’s list.</div>
-      <label class="field">Notes (optional)<textarea name="notes" rows="2" placeholder="Anything worth remembering from the tour"></textarea></label>`,
+      <div data-notfit class="callout warn hidden">The deal will be closed as <b>Lost</b> with the reason “Not a fit”.</div>
+      <div data-noshow class="callout hidden">The ${esc(a.type.toLowerCase())} will be marked as not attended and a “Rebook” call added to today’s list.</div>
+      <label class="field">Notes (optional)<textarea name="notes" rows="2" placeholder="Their current systems, who else needs to sign off, objections"></textarea></label>`,
     foot: `<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save</button>`,
     onMount(root, close, form) {
       bindChips(root, form);
-      const show = () => {
-        const r = form.result.value, pay = form.payment_type.value;
-        root.querySelector('[data-presented]').style.display = r === 'presented' ? 'flex' : 'none';
-        root.querySelector('[data-notright]').classList.toggle('hidden', r !== 'not_right');
-        root.querySelector('[data-noshow]').classList.toggle('hidden', r !== 'no_show');
-        root.querySelector('[data-amount]').classList.toggle('hidden', pay === 'None yet');
+      const fillPlans = keep => {
+        const list = plans(form.product.value);
+        form.plan.innerHTML = options(list.map(p => ({ value: p.name, label: p.name + (p.monthly ? ` – ${money(p.monthly)}/month` : ' – custom') })), keep || a.deal_plan || '', { blank: list.length ? 'Choose a plan' : 'Not decided yet' });
       };
-      form.result.addEventListener('change', show);
-      form.payment_type.addEventListener('change', () => {
-        show();
-        if (form.payment_type.value === 'Paid in full' && form.quote_price.value && !form.payment_amount.value) form.payment_amount.value = form.quote_price.value;
-      });
-      form.home_id.addEventListener('change', () => { const h = homes.find(x => String(x.id) === form.home_id.value); if (h && h.price && !form.quote_price.value) form.quote_price.value = h.price; });
-      show();
+      const fillPrice = () => {
+        const p = plans(form.product.value).find(x => x.name === form.plan.value);
+        if (p && p.monthly) form.monthly.value = p.monthly;
+        root.querySelector('[data-hint]').textContent = p && p.annual ? `${money(p.annual)}/month if paid annually` : '';
+      };
+      const show = () => {
+        const r = form.result.value;
+        root.querySelector('[data-held]').style.display = r === 'held' ? 'flex' : 'none';
+        root.querySelector('[data-notfit]').classList.toggle('hidden', r !== 'not_fit');
+        root.querySelector('[data-noshow]').classList.toggle('hidden', r !== 'no_show');
+      };
+      fillPlans(); form.result.addEventListener('change', show); show();
+      form.product.addEventListener('change', () => { fillPlans(''); fillPrice(); });
+      form.plan.addEventListener('change', fillPrice);
       form.addEventListener('submit', async e => {
         e.preventDefault();
         const d = formData(form);
         const r = results.find(x => x.v === d.result);
         const payload = { result: d.result, outcome: r.text, notes: d.notes };
-        if (d.result === 'presented') Object.assign(payload, { home_id: d.home_id ? Number(d.home_id) : null, quote_price: d.quote_price, payment_type: d.payment_type,
-          payment_amount: d.payment_type === 'None yet' ? null : d.payment_amount, next_steps: d.next_steps, next_step_date: d.next_step_date });
+        if (d.result === 'held') Object.assign(payload, { product: d.product, plan: d.plan, monthly: d.monthly, proposal_sent: d.proposal_sent, next_steps: d.next_steps, next_step_date: d.next_step_date });
         await post(`/api/appointments/${a.id}/outcome`, payload);
         close();
-        const msg = d.result === 'not_right' ? 'Saved; deal closed as Lost (park not right)'
+        const msg = d.result === 'not_fit' ? 'Saved; deal closed as Lost (not a fit)'
           : d.result === 'no_show' ? 'Saved; rebook call added to today'
-          : d.payment_type !== 'None yet' ? `Saved; deal moved to Finance & Paperwork (${d.payment_type.toLowerCase()} taken)`
-          : `Saved; deal moved to Park Tour${d.next_steps ? ' with your next step as a task' : ''}`;
+          : d.proposal_sent ? 'Saved; deal moved to Proposal sent with a follow-up in 3 days'
+          : `Saved; deal moved to Demo held${d.next_steps ? ' with your next step as a task' : ' with “Send proposal” as a task'}`;
         toast(msg); changed();
       });
     }
@@ -376,104 +377,120 @@ export function contactDialog(c = null, { onSaved, prefill } = {}) {
   const m = M();
   const v = c || { type: 'Prospect', lead_status: 'New', ...(prefill || {}) };
   modal({
-    title: c ? 'Edit contact' : 'New contact',
+    title: c ? 'Edit lead' : 'New lead',
     wide: true,
     body: `
       <div class="grid2">
-        <label class="field">First name<input name="first_name" value="${esc(v.first_name || '')}" autofocus></label>
+        <label class="field">Park or company<input name="company" value="${esc(v.company || '')}" ${c ? '' : 'autofocus'} placeholder="e.g. Willow Lakes Holiday Park"></label>
+        <label class="field">Website<input name="website" value="${esc(v.website || '')}" placeholder="e.g. willowlakes.co.uk"></label>
+        <label class="field">First name<input name="first_name" value="${esc(v.first_name || '')}"></label>
         <label class="field">Last name<input name="last_name" value="${esc(v.last_name || '')}"></label>
-        <label class="field">Mobile<input name="mobile" type="tel" value="${esc(v.mobile || '')}"></label>
+        <label class="field">Job title<input name="job_title" value="${esc(v.job_title || '')}" list="jobtitles-list" placeholder="e.g. General Manager"></label>
         <label class="field">Email<input name="email" type="email" value="${esc(v.email || '')}"></label>
-        <label class="field">Address<input name="address" value="${esc(v.address || '')}"></label>
-        <label class="field">Postcode<input name="postcode" value="${esc(v.postcode || '')}"></label>
+        <label class="field">Phone<input name="mobile" type="tel" value="${esc(v.mobile || '')}"></label>
+        <label class="field">County or area<input name="region" value="${esc(v.region || '')}" placeholder="e.g. Lincolnshire"></label>
       </div>
       <div class="grid3">
-        <label class="field">Type<select name="type">${options(m.contactTypes, v.type)}</select></label>
+        <label class="field">Units on the park<input name="units" type="number" min="0" step="1" data-num value="${esc(v.units ?? '')}" placeholder="e.g. 120"></label>
+        <label class="field">Number of parks<input name="sites" type="number" min="1" step="1" data-num value="${esc(v.sites ?? '')}" placeholder="1"></label>
+        <label class="field">Interested in<select name="interest">${options(m.products, v.interest, { blank: 'Not known yet' })}</select></label>
         <label class="field">Lead status<select name="lead_status">${options(m.leadStatuses, v.lead_status)}</select></label>
-        <label class="field">Lead source<input name="lead_source" value="${esc(v.lead_source || '')}" list="sources-list" placeholder="e.g. WEBSITE"></label>
-        <label class="field">Budget (£)<input name="budget" type="number" step="500" data-num value="${esc(v.budget ?? '')}"></label>
-        <label class="field">Bedrooms wanted<select name="bedrooms">${options(['', '1', '2', '3', '4+'], v.bedrooms)}</select></label>
-        <label class="field">Finance needed<select name="finance_needed">${options([{ value: 0, label: 'No' }, { value: 1, label: 'Yes' }], v.finance_needed ? 1 : 0)}</select></label>
+        <label class="field">Type<select name="type">${options(m.contactTypes, v.type)}</select></label>
+        <label class="field">Lead source<input name="lead_source" value="${esc(v.lead_source || '')}" list="sources-list" placeholder="e.g. Website form"></label>
       </div>
-      <label class="field">Preferences and notes<textarea name="preferences" rows="2" placeholder="e.g. Lakeside plot, prefers weekends, dog owner">${esc(v.preferences || '')}</textarea></label>
+      <label class="field">Current systems<input name="current_systems" value="${esc(v.current_systems || '')}" placeholder="Park management system, CRM, booking engine they use today (for your notes only)"></label>
+      <label class="field">Notes<textarea name="preferences" rows="2" placeholder="e.g. Busy sales office, misses evening enquiries, decision with the owner">${esc(v.preferences || '')}</textarea></label>
       <div class="field"><span>Marketing consent</span><div style="display:flex;gap:20px;flex-wrap:wrap">
         <label class="check"><input type="checkbox" name="consent_email" ${v.consent_email ? 'checked' : ''}> Email</label>
         <label class="check"><input type="checkbox" name="consent_sms" ${v.consent_sms ? 'checked' : ''}> Text message</label>
         <label class="check"><input type="checkbox" name="consent_post" ${v.consent_post ? 'checked' : ''}> Post</label>
       </div></div>
-      ${!c && isMgr() ? `<div class="grid2">
+      ${!c && isMgr() && (M().team || []).length > 1 ? `<div class="grid2">
         <label class="field">Allocate to<select name="owner_id">${teamOptions(prefill && prefill.owner_id !== undefined ? prefill.owner_id : me().id, { unallocated: true, unallocatedLabel: 'Nobody yet (unallocated)' })}</select></label>
-        ${isGroupMgr() && (M().parks || []).length > 1 ? `<label class="field">Park<select name="park_id">${parkOptions(me().park_id || M().parks[0].id)}</select><span class="faint small" style="font-weight:400">Used when unallocated; otherwise the person’s park.</span></label>` : ''}
+        ${isGroupMgr() && (M().parks || []).length > 1 ? `<label class="field">Team<select name="park_id">${parkOptions(me().park_id || M().parks[0].id)}</select><span class="faint small" style="font-weight:400">Used when unallocated; otherwise the person’s team.</span></label>` : ''}
       </div>` : ''}
-      <datalist id="sources-list"></datalist>`,
-    foot: `${c ? '<button type="button" class="btn danger" data-delete>Delete contact</button><div class="spacer"></div>' : ''}<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${c ? 'Save contact' : 'Add contact'}</button>`,
+      <datalist id="sources-list"></datalist>
+      <datalist id="jobtitles-list">${(m.jobTitles || []).map(t => `<option value="${esc(t)}">`).join('')}</datalist>`,
+    foot: `${c ? '<button type="button" class="btn danger" data-delete>Delete lead</button><div class="spacer"></div>' : ''}<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${c ? 'Save lead' : 'Add lead'}</button>`,
     async onMount(root, close, form) {
       form.addEventListener('submit', async e => {
         e.preventDefault();
         const d = formData(form);
-        d.finance_needed = Number(d.finance_needed);
         if ('owner_id' in d) d.owner_id = d.owner_id ? Number(d.owner_id) : null;
-        if (!(d.first_name || d.last_name)) { toast('Enter a name', { error: true }); form.first_name.focus(); return; }
+        if (!(d.first_name || d.last_name || d.company)) { toast('Enter a name or the park’s name', { error: true }); form.company.focus(); return; }
         const saved = c ? await patch(`/api/contacts/${c.id}`, d) : await post('/api/contacts', d);
-        close(); toast(c ? 'Contact saved' : `${fullName(saved)} added`); changed();
+        close(); toast(c ? 'Lead saved' : `${fullName(saved)} added`); changed();
         onSaved && onSaved(saved);
       });
       root.querySelector('[data-delete]')?.addEventListener('click', async () => {
-        if (await confirmBox('Delete this contact?', `${esc(fullName(c))} and their deals, tasks and notes will be permanently deleted. This cannot be undone.`, { ok: 'Delete contact', danger: true })) {
-          await del(`/api/contacts/${c.id}`); close(); toast('Contact deleted'); location.hash = '#/contacts';
+        if (await confirmBox('Delete this lead?', `${esc(fullName(c))} and their deals, tasks and notes will be permanently deleted. This cannot be undone.`, { ok: 'Delete lead', danger: true })) {
+          await del(`/api/contacts/${c.id}`); close(); toast('Lead deleted'); location.hash = '#/contacts';
         }
       });
       const src = await get('/api/sources');
-      root.querySelector('#sources-list').innerHTML = src.filter(s => s.source !== '(none)').map(s => `<option value="${esc(s.source)}">`).join('');
+      const known = ['Website form', 'Email', 'Phone', 'Referral', 'Event or show', 'LinkedIn', 'X (Twitter)', 'Clutch', 'Import'];
+      root.querySelector('#sources-list').innerHTML = [...new Set([...known, ...src.filter(s => s.source !== '(none)').map(s => s.source)])].map(s => `<option value="${esc(s)}">`).join('');
     }
   });
 }
 
 /* ------------------------------------------------------------------ deals */
 
-export async function dealDialog({ deal = null, contact = null } = {}) {
+export function dealDialog({ deal = null, contact = null } = {}) {
   const m = M();
-  const [homes, plots] = await Promise.all([get('/api/homes'), get('/api/plots')]);
-  const d = deal || { deal_type: contact && contact.type === 'Owner' ? 'Upgrade with part-ex' : 'New sale' };
+  const d = deal || { deal_type: contact && m.products.includes(contact.interest) ? contact.interest : 'ParkPilot AI', billing: 'Monthly', sites: contact && contact.sites };
   modal({
     title: deal ? 'Edit deal' : 'New deal',
     body: `
       <div class="grid2">
-        <label class="field">Deal type<select name="deal_type">${options(m.dealTypes, d.deal_type)}</select></label>
-        <label class="field">Target handover<input type="date" name="target_handover" value="${esc(d.target_handover || '')}"></label>
-        <label class="field">Holiday home<select name="home_id">${options(homes.filter(h => ['Available', 'Reserved', 'Part-ex in'].includes(h.status) || h.id === d.home_id).map(h => ({ value: h.id, label: `${[h.year, h.make, h.model].filter(Boolean).join(' ')}${h.price ? ' – ' + money(h.price) : ''} (${h.status})` })), d.home_id, { blank: 'Not chosen yet' })}</select></label>
-        <label class="field">Plot<select name="plot_id">${options(plots.filter(p => p.status !== 'Occupied' || p.id === d.plot_id).map(p => ({ value: p.id, label: `Plot ${p.plot_number}${p.area ? ', ' + p.area : ''} (${p.status})` })), d.plot_id, { blank: 'Not chosen yet' })}</select></label>
-        <label class="field">Price (£)<input type="number" step="100" name="price" data-num value="${esc(d.price ?? '')}"></label>
-        <label class="field">Deposit or payment taken (£)<input type="number" step="100" name="deposit" data-num value="${esc(d.deposit ?? '')}"></label>
-        <label class="field">Part-ex allowance (£)<input type="number" step="100" name="part_ex_allowance" data-num value="${esc(d.part_ex_allowance ?? '')}"></label>
-        <label class="field">Finance status<select name="finance_status">${options(['', 'Not needed', 'To apply', 'Applied', 'Approved', 'Declined'], d.finance_status)}</select></label>
-        <label class="field">Payment<select name="payment_status">${options(m.paymentStatuses, d.payment_status || 'None yet')}</select></label>
+        <label class="field">Product<select name="deal_type">${options(m.products, d.deal_type)}</select></label>
+        <label class="field">Plan<select name="plan"></select></label>
+        <label class="field">Monthly value (£)<input type="number" step="1" min="0" name="price" data-num value="${esc(d.price ?? '')}"><span class="plan-hint" data-hint></span></label>
+        <label class="field">Billing<select name="billing">${options(['Monthly', 'Annual'], d.billing || 'Monthly')}</select></label>
+        <label class="field">Number of parks<input type="number" step="1" min="1" name="sites" data-num value="${esc(d.sites ?? '')}"></label>
+        <label class="field">Expected to close<input type="date" name="expected_close" value="${esc(d.expected_close || '')}"></label>
       </div>
-      <label class="field">Notes<textarea name="notes" rows="2">${esc(d.notes || '')}</textarea></label>
-      ${!homes.length ? '<div class="faint small">Add your stock under Homes and plots to pick a home here.</div>' : ''}`,
+      <label class="field">Notes<textarea name="notes" rows="2" placeholder="What's included, discounts agreed, who signs off">${esc(d.notes || '')}</textarea></label>
+      <p class="faint small" style="margin:0">List prices: ParkPilot AI from £495/month, ParkPilot CRM from £149 per park per month. Every plan includes a dedicated account manager.</p>`,
     foot: `${deal ? '<button type="button" class="btn danger" data-delete>Delete deal</button><div class="spacer"></div>' : ''}<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${deal ? 'Save deal' : 'Open deal'}</button>`,
     onMount(root, close, form) {
-      form.home_id.addEventListener('change', () => { const h = homes.find(x => String(x.id) === form.home_id.value); if (h && h.price && !form.price.value) form.price.value = h.price; if (h && h.plot_id && !form.plot_id.value) form.plot_id.value = h.plot_id; });
+      const fillPlans = keep => {
+        const list = plans(form.deal_type.value);
+        form.plan.innerHTML = options(list.map(p => ({ value: p.name, label: p.name + (p.monthly ? ` – ${money(p.monthly)}/month` : ' – custom') })), keep ?? d.plan ?? '', { blank: list.length ? 'Choose a plan' : 'Not decided yet' });
+        hint();
+      };
+      const current = () => plans(form.deal_type.value).find(x => x.name === form.plan.value);
+      const hint = () => { const p = current(); root.querySelector('[data-hint]').textContent = p && p.annual ? `${money(p.annual)}/month on annual billing` : ''; };
+      const price = () => {
+        const p = current(); if (!p || !p.monthly) return;
+        const each = form.billing.value === 'Annual' && p.annual ? p.annual : p.monthly;
+        const perPark = form.deal_type.value === 'ParkPilot CRM';
+        form.price.value = each * (perPark ? Math.max(1, Number(form.sites.value) || 1) : 1);
+      };
+      fillPlans();
+      form.deal_type.addEventListener('change', () => { fillPlans(''); price(); });
+      form.plan.addEventListener('change', () => { hint(); price(); });
+      form.billing.addEventListener('change', price);
+      form.sites.addEventListener('change', price);
       form.addEventListener('submit', async e => {
         e.preventDefault();
         const v = formData(form);
-        v.home_id = v.home_id ? Number(v.home_id) : null; v.plot_id = v.plot_id ? Number(v.plot_id) : null;
         if (deal) await patch(`/api/deals/${deal.id}`, v); else await post('/api/deals', { ...v, contact_id: contact.id });
         close(); toast(deal ? 'Deal saved' : 'Deal opened'); changed();
       });
       root.querySelector('[data-delete]')?.addEventListener('click', async () => {
-        if (await confirmBox('Delete this deal?', 'The deal and its valuations will be removed. Notes on the timeline stay.', { ok: 'Delete deal', danger: true })) { await del(`/api/deals/${deal.id}`); close(); changed(); }
+        if (await confirmBox('Delete this deal?', 'The deal will be removed. Notes on the timeline stay.', { ok: 'Delete deal', danger: true })) { await del(`/api/deals/${deal.id}`); close(); changed(); }
       });
     }
   });
 }
 
 export function lostDialog(dealId) {
-  const reasons = ['Price', 'Bought elsewhere', 'Site fees', 'Finance declined', 'Changed plans', 'No response'];
+  const reasons = M().lostReasons;
   modal({
     title: 'Mark deal as lost',
     body: `<div class="chips" data-r>${reasons.map(r => `<button type="button" class="chip" data-v="${esc(r)}">${esc(r)}</button>`).join('')}</div>
-      <label class="field">Reason<input name="reason" required placeholder="Why didn't it go ahead?"></label>`,
+      <label class="field">Reason<input name="reason" required placeholder="Why didn’t it go ahead?"></label>`,
     foot: `<button class="btn" data-close>Cancel</button><button class="btn danger solid" type="submit">Mark as lost</button>`,
     onMount(root, close, form) {
       root.querySelector('[data-r]').addEventListener('click', e => { const b = e.target.closest('.chip'); if (b) form.reason.value = b.dataset.v; });
@@ -488,107 +505,6 @@ export async function moveStage(deal, stage) {
   toast(`Moved to ${stage}`); changed();
 }
 
-export async function valuationDialog(deal, contact) {
-  const homes = (await get('/api/homes')).filter(h => h.owner_contact_id === contact.id);
-  const validDefault = addDays(today(), 30);
-  modal({
-    title: 'Part-ex valuation',
-    body: `
-      <label class="field">Their current home<select name="home_id">${options(homes.map(h => ({ value: h.id, label: [h.year, h.make, h.model].filter(Boolean).join(' ') + (h.plot_number ? ', plot ' + h.plot_number : '') })), homes[0]?.id, { blank: homes.length ? 'Choose…' : 'Not on file – describe it below' })}</select></label>
-      <label class="field">Description<input name="description" placeholder="e.g. 2014 Willerby Rio, 35x12, 2 bed"></label>
-      <div class="grid3">
-        <label class="field">Condition<select name="condition_grade">${options(['Excellent', 'Good', 'Fair', 'Poor'], 'Good')}</select></label>
-        <label class="field">Offered value (£)<input type="number" step="100" name="offered_value" data-num required></label>
-        <label class="field">Valid until<input type="date" name="valid_until" value="${validDefault}"></label>
-      </div>
-      <label class="check"><input type="checkbox" name="within_age_policy" checked> Within the park’s age policy</label>
-      <label class="field">Notes<textarea name="notes" rows="2"></textarea></label>`,
-    foot: `<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save valuation</button>`,
-    onMount(root, close, form) {
-      form.addEventListener('submit', async e => {
-        e.preventDefault();
-        const v = formData(form);
-        if (!v.offered_value) { form.offered_value.focus(); return; }
-        v.home_id = v.home_id ? Number(v.home_id) : null;
-        await post(`/api/deals/${deal.id}/valuations`, v);
-        close(); toast('Valuation saved and applied to the deal'); changed();
-      });
-    }
-  });
-}
-
-/* ------------------------------------------------------------ homes/plots */
-
-export async function homeDialog(home = null, { ownerId = null, ownerName = '' } = {}) {
-  const m = M();
-  const plots = await get('/api/plots');
-  const h = home || { status: ownerId ? 'Owner-held' : 'Available', owner_contact_id: ownerId };
-  modal({
-    title: home ? 'Edit holiday home' : 'Add holiday home',
-    wide: true,
-    body: `
-      <div class="grid3">
-        <label class="field">Make<input name="make" value="${esc(h.make || '')}" autofocus placeholder="e.g. Willerby"></label>
-        <label class="field">Model<input name="model" value="${esc(h.model || '')}" placeholder="e.g. Sierra"></label>
-        <label class="field">Year<input name="year" type="number" data-num value="${esc(h.year ?? '')}"></label>
-        <label class="field">Size<input name="size" value="${esc(h.size || '')}" placeholder="e.g. 38x12"></label>
-        <label class="field">Bedrooms<input name="bedrooms" type="number" data-num value="${esc(h.bedrooms ?? '')}"></label>
-        <label class="field">Condition<select name="condition">${options(['', 'New', 'Excellent', 'Good', 'Fair', 'Poor'], h.condition)}</select></label>
-        <label class="field">Status<select name="status">${options(m.homeStatuses, h.status)}</select></label>
-        <label class="field">Price (£)<input name="price" type="number" step="100" data-num value="${esc(h.price ?? '')}"></label>
-        <label class="field">Plot<select name="plot_id">${options(plots.map(p => ({ value: p.id, label: 'Plot ' + p.plot_number + (p.area ? ', ' + p.area : '') })), h.plot_id, { blank: 'None' })}</select></label>
-      </div>
-      <div class="grid2">
-        <div class="field"><span>Owner (for owners’ homes)</span><div data-picker></div></div>
-        <label class="field">Licence expiry<input type="date" name="licence_expiry" value="${esc(h.licence_expiry || '')}"></label>
-      </div>
-      <label class="field">Notes<textarea name="notes" rows="2">${esc(h.notes || '')}</textarea></label>`,
-    foot: `${home ? '<button type="button" class="btn danger" data-delete>Delete</button><div class="spacer"></div>' : ''}<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save home</button>`,
-    onMount(root, close, form) {
-      contactPicker(root.querySelector('[data-picker]'), { name: 'owner_contact_id', value: h.owner_contact_id, label: home && home.first_name ? fullName(home) : ownerName, allowNew: false });
-      form.addEventListener('submit', async e => {
-        e.preventDefault();
-        const v = formData(form);
-        v.plot_id = v.plot_id ? Number(v.plot_id) : null; v.owner_contact_id = v.owner_contact_id ? Number(v.owner_contact_id) : null;
-        if (home) await patch(`/api/homes/${home.id}`, v); else await post('/api/homes', v);
-        close(); toast('Holiday home saved'); changed();
-      });
-      root.querySelector('[data-delete]')?.addEventListener('click', async () => {
-        if (await confirmBox('Delete this home?', 'It will be removed from stock and from any deals.', { ok: 'Delete', danger: true })) { await del(`/api/homes/${home.id}`); close(); changed(); }
-      });
-    }
-  });
-}
-
-export function plotDialog(plot = null) {
-  const m = M();
-  const p = plot || { status: 'Vacant' };
-  modal({
-    title: plot ? `Edit plot ${plot.plot_number}` : 'Add plot',
-    body: `<div class="grid2">
-        <label class="field">Plot number<input name="plot_number" value="${esc(p.plot_number || '')}" autofocus required></label>
-        <label class="field">Area<input name="area" value="${esc(p.area || '')}" placeholder="e.g. Meadow View"></label>
-        <label class="field">Outlook<input name="outlook" value="${esc(p.outlook || '')}" placeholder="e.g. Lakeside"></label>
-        <label class="field">Annual pitch fee (£)<input name="pitch_fee" type="number" step="10" data-num value="${esc(p.pitch_fee ?? '')}"></label>
-        <label class="field">Status<select name="status">${options(m.plotStatuses, p.status)}</select></label>
-      </div>
-      <label class="field">Notes<textarea name="notes" rows="2">${esc(p.notes || '')}</textarea></label>`,
-    foot: `${plot ? '<button type="button" class="btn danger" data-delete>Delete</button><div class="spacer"></div>' : ''}<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save plot</button>`,
-    onMount(root, close, form) {
-      form.addEventListener('submit', async e => {
-        e.preventDefault();
-        const v = formData(form);
-        if (!v.plot_number) { form.plot_number.focus(); return; }
-        if (plot) await patch(`/api/plots/${plot.id}`, v); else await post('/api/plots', v);
-        close(); toast('Plot saved'); changed();
-      });
-      root.querySelector('[data-delete]')?.addEventListener('click', async () => {
-        if (await confirmBox('Delete this plot?', 'Homes and deals on it will be unlinked.', { ok: 'Delete', danger: true })) { await del(`/api/plots/${plot.id}`); close(); changed(); }
-      });
-    }
-  });
-}
-
 export { minutes, hhmm };
 
 /* ------------------------------------------------------------ allocate */
@@ -601,7 +517,7 @@ export function allocateDialog(ids, { current = undefined, label = '', onDone } 
     title: n === 1 ? `Allocate ${label || 'this lead'}` : `Allocate ${plural(n, 'lead')}`,
     body: `
       <label class="field">Give ${n === 1 ? 'it' : 'them'} to<select name="owner_id" autofocus>${teamOptions(current === undefined ? '' : current, { unallocated: true, unallocatedLabel: 'Nobody (back to unallocated)' })}</select></label>
-      ${isGroupMgr() && parks.length > 1 ? `<label class="field" data-parkrow>Park (when unallocated)<select name="park_id">${parkOptions('', { blank: 'Keep their current park' })}</select></label>` : ''}
+      ${isGroupMgr() && parks.length > 1 ? `<label class="field" data-parkrow>Team (when unallocated)<select name="park_id">${parkOptions('', { blank: 'Keep their current team' })}</select></label>` : ''}
       <p class="faint small" style="margin:0">Their open tasks move with them. Appointments already booked stay in the diary they were booked into.</p>`,
     foot: `<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Allocate</button>`,
     onMount(root, close, form) {

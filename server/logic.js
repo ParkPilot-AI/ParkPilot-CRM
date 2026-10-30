@@ -2,19 +2,29 @@
 const { db, tx, insert, update, get, getSettings, setState, getState, logJob } = require('./db');
 const U = require('./util');
 
-// The sales pipeline. Deals move forward automatically as things happen (see advanceDeal below):
-//   Enquiry -> Appointment (appointment booked) -> Park Tour (presentation given: quote, payment,
-//   next steps) -> Finance & Paperwork (deposit or payment in full) -> Siting & Handover (handover
-//   booked) -> Completed (keys handed over). "Park not right for the customer" closes it as Lost.
-const STAGES = ['Enquiry', 'Appointment', 'Park Tour', 'Finance & Paperwork', 'Siting & Handover', 'Completed', 'Lost'];
-const OPEN_STAGES = STAGES.slice(0, 5);
-const APPT_TYPES = ['Park tour', 'Part-ex valuation', 'Finance meeting', 'Handover', 'Phone call', 'Teams call'];
-const PAYMENT_STATUSES = ['None yet', 'Deposit', 'Paid in full'];
+// The ParkPilot sales pipeline. Deals move forward automatically as things happen (see advanceDeal):
+//   Enquiry -> Demo booked (demo or site visit booked) -> Demo held (outcome recorded) ->
+//   Proposal sent -> Won. "Not a fit" closes it as Lost.
+const STAGES = ['Enquiry', 'Demo booked', 'Demo held', 'Proposal sent', 'Won', 'Lost'];
+const OPEN_STAGES = STAGES.slice(0, 4);
+const APPT_TYPES = ['Demo', 'Discovery call', 'Follow-up call', 'Site visit', 'Onboarding call'];
+const REMOTE_TYPES = ['Demo', 'Onboarding call'];   // Google Meet by default
+const CALL_TYPES = ['Discovery call', 'Follow-up call'];
+const TOUR_TYPES = ['Demo', 'Site visit'];          // the ones that move a deal on
+// What a deal can be for, with the published monthly list prices (editable on each deal).
+const PRODUCTS = ['ParkPilot AI', 'ParkPilot CRM', 'AI + CRM', 'Not decided yet'];
+const PLANS = {
+  'ParkPilot AI': [{ name: 'Starter', monthly: 495 }, { name: 'Professional', monthly: 995 }, { name: 'Enterprise', monthly: null }],
+  'ParkPilot CRM': [{ name: 'Essentials', monthly: 149, annual: 124 }, { name: 'Professional', monthly: 299, annual: 249 }, { name: 'Group', monthly: null }],
+  'AI + CRM': [{ name: 'AI Starter + CRM Essentials', monthly: 644 }, { name: 'AI Professional + CRM Professional', monthly: 1294 }, { name: 'Enterprise + Group', monthly: null }],
+  'Not decided yet': []
+};
+const LOST_REASONS = ['Not a fit', 'Price', 'Chose another supplier', 'Happy with current setup', 'Timing – revisit later', 'No response'];
 const CATEGORIES = ['Follow-up', 'Call', 'Email', 'Admin'];
 const PRIORITIES = ['High', 'Medium', 'Low'];
 const LEAD_STATUSES = ['New', 'Contacted', 'Nurture', 'Dormant', 'Customer', 'Lost'];
 
-const graph = () => require('./graph'); // late require (graph depends on this module)
+const graph = () => require('./google'); // late require (google depends on this module)
 const actor = () => (require('./access').ctx.user || {}).id || null;
 
 /* ------------------------------------------------------------------ tasks */
@@ -178,13 +188,12 @@ function mergeContacts(keepId, otherIds) {
       const o = get('contacts', oid);
       if (!o) continue;
       const patch = {};
-      for (const k of ['email', 'mobile', 'phone_e164', 'address', 'postcode', 'lead_source', 'budget', 'bedrooms', 'preferences', 'enquiry_date']) {
+      for (const k of ['email', 'mobile', 'phone_e164', 'address', 'postcode', 'lead_source', 'preferences', 'enquiry_date', 'company', 'job_title', 'units', 'sites', 'region', 'website', 'interest', 'current_systems']) {
         if ((keep[k] === null || keep[k] === '') && o[k]) { patch[k] = o[k]; keep[k] = o[k]; }
       }
       if (o.enquiry_date && keep.enquiry_date && o.enquiry_date < keep.enquiry_date) patch.enquiry_date = o.enquiry_date;
       if (Object.keys(patch).length) update('contacts', keepId, patch);
       for (const t of ['deals', 'tasks', 'appointments', 'interactions']) db.prepare(`UPDATE ${t} SET contact_id = ? WHERE contact_id = ?`).run(keepId, oid);
-      db.prepare('UPDATE homes SET owner_contact_id = ? WHERE owner_contact_id = ?').run(keepId, oid);
       insert('interactions', { contact_id: keepId, type: 'Note', at: U.nowLocal(), summary: `Merged duplicate record: ${o.first_name} ${o.last_name}${o.lead_no ? ' (' + o.lead_no + ')' : ''}.` });
       // Keep the old external id so a re-import doesn't recreate the duplicate.
       db.prepare('DELETE FROM contacts WHERE id = ?').run(oid);
@@ -218,15 +227,12 @@ function assignContacts(contacts, ownerId, parkId, by) {
 /* ----------------------------------------------------------------- deals */
 
 const STAGE_TASKS = {
-  'Park Tour': [{ title: 'Follow up on quote and next steps', category: 'Call', priority: 'High', days: 2 }],
-  'Finance & Paperwork': [
-    { title: 'Chase finance decision', category: 'Follow-up', priority: 'High', days: 5, when: (d, c) => c && c.finance_needed },
-    { title: 'Send licence agreement', category: 'Email', priority: 'Medium', days: 2 },
-    { title: 'Confirm balance payment date', category: 'Call', priority: 'Medium', days: 7, when: d => d.payment_status !== 'Paid in full' },
-    { title: 'Book handover', category: 'Admin', priority: 'Medium', handoverOffset: -14, days: 14 }
-  ],
-  'Siting & Handover': [{ title: 'Confirm siting, connections and keys', category: 'Admin', priority: 'High', days: 3 }],
-  'Completed': [{ title: 'Welcome call after first stay', category: 'Call', priority: 'Low', days: 14 }]
+  'Demo held': [{ title: 'Send proposal', category: 'Email', priority: 'High', days: 1 }],
+  'Proposal sent': [{ title: 'Follow up on proposal', category: 'Call', priority: 'High', days: 3 }],
+  'Won': [
+    { title: 'Kick off onboarding and introduce their account manager', category: 'Admin', priority: 'High', days: 1 },
+    { title: 'Check-in call after go-live', category: 'Call', priority: 'Medium', days: 21 }
+  ]
 };
 
 function setDealStage(dealId, stage, { lostReason, skipTasks = false, reason } = {}) {
@@ -239,35 +245,19 @@ function setDealStage(dealId, stage, { lostReason, skipTasks = false, reason } =
     const was = d.furthest_stage || (d.stage === 'Lost' ? 'Enquiry' : d.stage);
     const furthest = stage !== 'Lost' && STAGES.indexOf(stage) > STAGES.indexOf(was) ? stage : was;
     const dp = { stage, furthest_stage: furthest, stage_changed_at: U.nowStamp(), lost_reason: stage === 'Lost' ? (lostReason || d.lost_reason) : d.lost_reason };
-    if (!d.reserved_at && STAGES.indexOf(stage) >= STAGES.indexOf('Finance & Paperwork') && stage !== 'Lost') dp.reserved_at = U.nowStamp();
-    if (stage === 'Completed' && !d.completed_at) dp.completed_at = U.nowStamp();
+    if (!d.reserved_at && STAGES.indexOf(stage) >= STAGES.indexOf('Proposal sent') && stage !== 'Lost') dp.reserved_at = U.nowStamp();
+    if (stage === 'Won' && !d.completed_at) dp.completed_at = U.nowStamp();
     update('deals', dealId, dp);
     insert('interactions', { contact_id: d.contact_id, deal_id: dealId, type: 'Deal', at: U.nowLocal(), summary: `Deal moved from ${d.stage} to ${stage}${stage === 'Lost' && lostReason ? ' – ' + lostReason : reason ? ' (' + reason + ')' : ''}.` });
-    const contact = get('contacts', d.contact_id);
     for (const tpl of skipTasks ? [] : STAGE_TASKS[stage] || []) {
-      if (tpl.when && !tpl.when(d, contact)) continue;
-      let due = U.addDays(U.today(), tpl.days);
-      if (tpl.handoverOffset && d.target_handover) due = U.addDays(d.target_handover, tpl.handoverOffset);
-      if (due < U.today()) due = U.today();
+      const due = U.addDays(U.today(), tpl.days);
       createTask({ title: tpl.title, category: tpl.category, priority: tpl.priority, due_date: U.nextOpenDay(due, s.closedDays),
         contact_id: d.contact_id, deal_id: dealId, auto_key: `deal:${dealId}:${stage}:${tpl.title}` });
     }
     if (d.stage === 'Lost' && OPEN_STAGES.includes(stage)) db.prepare("UPDATE contacts SET lead_status = 'Contacted' WHERE id = ? AND lead_status = 'Lost'").run(d.contact_id);
-    if (stage === 'Finance & Paperwork' || stage === 'Siting & Handover') {
-      if (d.home_id) update('homes', d.home_id, { status: 'Reserved' });
-      if (d.plot_id) update('plots', d.plot_id, { status: 'Reserved' });
-    }
-    if (stage === 'Completed') {
-      update('contacts', d.contact_id, { type: 'Owner', lead_status: 'Customer' });
-      if (d.home_id) update('homes', d.home_id, { status: 'Owner-held', owner_contact_id: d.contact_id, plot_id: d.plot_id || null });
-      if (d.plot_id) update('plots', d.plot_id, { status: 'Occupied' });
-      for (const v of db.prepare('SELECT home_id FROM valuations WHERE deal_id = ? AND home_id IS NOT NULL').all(dealId))
-        update('homes', v.home_id, { status: 'Part-ex in', owner_contact_id: null });
-    }
+    if (stage === 'Won') update('contacts', d.contact_id, { type: 'Customer', lead_status: 'Customer' });
     if (stage === 'Lost') {
-      if (d.home_id) db.prepare("UPDATE homes SET status = 'Available' WHERE id = ? AND status = 'Reserved'").run(d.home_id);
-      if (d.plot_id) db.prepare("UPDATE plots SET status = 'Vacant' WHERE id = ? AND status = 'Reserved'").run(d.plot_id);
-      const open = db.prepare("SELECT COUNT(*) n FROM deals WHERE contact_id = ? AND stage NOT IN ('Lost','Completed') AND id <> ?").get(d.contact_id, dealId).n;
+      const open = db.prepare("SELECT COUNT(*) n FROM deals WHERE contact_id = ? AND stage NOT IN ('Lost','Won') AND id <> ?").get(d.contact_id, dealId).n;
       if (!open) db.prepare("UPDATE contacts SET lead_status = 'Lost' WHERE id = ? AND type = 'Prospect'").run(d.contact_id);
     }
   });
@@ -275,7 +265,7 @@ function setDealStage(dealId, stage, { lostReason, skipTasks = false, reason } =
 }
 
 // Moves a deal on to `stage` only if that is further along than where it is now (never backwards,
-// never out of Completed or Lost). Returns true if it moved.
+// never out of Won or Lost). Returns true if it moved.
 function advanceDeal(dealId, stage, opts = {}) {
   const d = dealId && get('deals', dealId);
   if (!d || !OPEN_STAGES.includes(d.stage)) return false;
@@ -284,12 +274,12 @@ function advanceDeal(dealId, stage, opts = {}) {
   return true;
 }
 
-// The open deal for a contact, creating one at Enquiry if they have none (e.g. a dormant lead booking a tour).
+// The open deal for a contact, creating one at Enquiry if they have none (e.g. a dormant lead booking a demo).
 function ensureDeal(contactId) {
-  const d = db.prepare("SELECT id FROM deals WHERE contact_id = ? AND stage NOT IN ('Completed','Lost') ORDER BY updated_at DESC LIMIT 1").get(contactId);
+  const d = db.prepare("SELECT id FROM deals WHERE contact_id = ? AND stage NOT IN ('Won','Lost') ORDER BY updated_at DESC LIMIT 1").get(contactId);
   if (d) return d.id;
   const c = get('contacts', contactId);
-  const id = insert('deals', { contact_id: contactId, stage: 'Enquiry', stage_changed_at: U.nowStamp(), deal_type: c && c.type === 'Owner' ? 'Upgrade with part-ex' : 'New sale' });
+  const id = insert('deals', { contact_id: contactId, stage: 'Enquiry', furthest_stage: 'Enquiry', stage_changed_at: U.nowStamp(), deal_type: (c && PRODUCTS.includes(c.interest) && c.interest) || 'Not decided yet' });
   insert('interactions', { contact_id: contactId, deal_id: id, type: 'Deal', at: U.nowLocal(), summary: 'New deal opened.' });
   if (c && ['Dormant', 'Lost'].includes(c.lead_status)) update('contacts', contactId, { lead_status: 'Contacted' });
   return id;
@@ -299,7 +289,7 @@ function ensureDeal(contactId) {
 // date falls in it, whether or not a deal was opened – plus anyone whose deal was opened in it.
 // Each person is counted once, at the furthest stage any of their deals reached (lost deals still
 // count towards the stages they got to). "Here now" and values come from their open deals.
-const FUNNEL_STAGES = [...OPEN_STAGES, 'Completed'];
+const FUNNEL_STAGES = [...OPEN_STAGES, 'Won'];
 // `scope` limits it to some leads: { sql, args } on contacts aliased c (see access.contactWhere).
 function funnel(period = '90', scope = { sql: '1=1', args: [] }) {
   const days = { '30': 30, '90': 90, '365': 365 }[String(period)];
@@ -307,7 +297,7 @@ function funnel(period = '90', scope = { sql: '1=1', args: [] }) {
   const idx = st => FUNNEL_STAGES.indexOf(st);
   const contacts = db.prepare(`SELECT c.id, substr(COALESCE(c.enquiry_date, c.created_at),1,10) AS d FROM contacts c WHERE c.type <> 'Partner' AND ${scope.sql}`).all(...scope.args);
   const deals = db.prepare(`SELECT d.contact_id, d.stage, d.furthest_stage, d.lost_reason, substr(d.created_at,1,10) AS created,
-                            COALESCE(d.price,0) - COALESCE(d.part_ex_allowance,0) AS value FROM deals d JOIN contacts c ON c.id = d.contact_id WHERE ${scope.sql}`).all(...scope.args);
+                            COALESCE(d.price,0) AS value FROM deals d JOIN contacts c ON c.id = d.contact_id WHERE ${scope.sql}`).all(...scope.args);
   const byContact = new Map();
   for (const d of deals) { if (!byContact.has(d.contact_id)) byContact.set(d.contact_id, []); byContact.get(d.contact_id).push(d); }
   const stages = FUNNEL_STAGES.map(stage => ({ stage, reached: 0, now: 0, value: 0 }));
@@ -317,7 +307,7 @@ function funnel(period = '90', scope = { sql: '1=1', args: [] }) {
     const all = byContact.get(c.id) || [];
     const inPeriod = c.d >= since;
     // Deals that belong to this period: opened in it, or still open for someone who enquired in it.
-    const mine = all.filter(d => d.created >= since || (inPeriod && !['Completed', 'Lost'].includes(d.stage)));
+    const mine = all.filter(d => d.created >= since || (inPeriod && !['Won', 'Lost'].includes(d.stage)));
     if (!inPeriod && !mine.length) continue;
     total++;
     let reach = 0, openAt = mine.length ? -1 : 0;
@@ -338,7 +328,7 @@ function funnel(period = '90', scope = { sql: '1=1', args: [] }) {
 
 /* ---------------------------------------------------------- appointments */
 
-// One person's busy time: their appointments here plus the rest of their Outlook calendar.
+// One person's busy time: their appointments in the CRM.
 function busyBlocks(fromDay, toDay, excludeApptId, ownerId) {
   const from = fromDay + 'T00:00', to = U.addDays(toDay, 1) + 'T00:00';
   const appts = db.prepare(`SELECT id, start, end FROM appointments WHERE status = 'Scheduled' AND owner_id IS ? AND end > ? AND start < ? AND id IS NOT ?`)
@@ -349,7 +339,7 @@ function busyBlocks(fromDay, toDay, excludeApptId, ownerId) {
   return [...appts, ...ext].map(b => ({ start: b.start, end: b.end }));
 }
 
-function suggestSlots({ type = 'Park tour', from, days = 14, count = 3, excludeApptId, duration, ownerId = actor() } = {}) {
+function suggestSlots({ type = 'Demo', from, days = 14, count = 3, excludeApptId, duration, ownerId = actor() } = {}) {
   const s = getSettings();
   const dur = Number(duration) || s.durations[type] || 60;
   const buffer = s.bufferMinutes || 0;
@@ -392,7 +382,7 @@ function syncAutoTasks(appt) {
   const prepDue = U.prevOpenDay(day, s.closedDays);
   const followDue = U.nextOpenDay(U.addDays(day, 1), s.closedDays);
   const prepKey = `appt:${appt.id}:prep`, followKey = `appt:${appt.id}:follow`;
-  const isCall = appt.type === 'Phone call';
+  const isCall = CALL_TYPES.includes(appt.type);
   const prep = db.prepare('SELECT * FROM tasks WHERE auto_key = ?').get(prepKey);
   const follow = db.prepare('SELECT * FROM tasks WHERE auto_key = ?').get(followKey);
   if (!isCall && day > U.today()) {
@@ -407,40 +397,36 @@ function syncAutoTasks(appt) {
 
 function createAppointment(data) {
   const s = getSettings();
-  const type = APPT_TYPES.includes(data.type) ? data.type : 'Park tour';
+  const type = APPT_TYPES.includes(data.type) ? data.type : 'Demo';
   if (!data.start) throw httpError(400, 'Choose a start time');
-  const dur = Number(data.duration) || s.durations[type] || 60;
+  const dur = Number(data.duration) || s.durations[type] || 30;
   const end = data.end || U.addMinutes(data.start, dur);
   const contact = data.contact_id ? get('contacts', data.contact_id) : null;
   let dealId = data.deal_id || null;
   if (!dealId && contact) {
-    // Booking anything other than a quick phone call means they're in the pipeline.
-    if (type === 'Phone call') {
-      const d = db.prepare("SELECT id FROM deals WHERE contact_id = ? AND stage NOT IN ('Completed','Lost') ORDER BY updated_at DESC LIMIT 1").get(contact.id);
+    // A demo or site visit means they're in the pipeline; a quick call attaches to an open deal if there is one.
+    if (TOUR_TYPES.includes(type)) dealId = ensureDeal(contact.id);
+    else {
+      const d = db.prepare("SELECT id FROM deals WHERE contact_id = ? AND stage NOT IN ('Won','Lost') ORDER BY updated_at DESC LIMIT 1").get(contact.id);
       if (d) dealId = d.id;
-    } else dealId = ensureDeal(contact.id);
+    }
   }
-  const isRemote = data.is_remote ? 1 : (type === 'Teams call' ? 1 : 0);
+  const isRemote = data.is_remote === undefined || data.is_remote === null ? (REMOTE_TYPES.includes(type) ? 1 : 0) : (data.is_remote ? 1 : 0);
   const owner = data.owner_id || actor();
   const id = tx(() => {
     const id = insert('appointments', {
       type, title: (data.title || '').trim() || apptTitle(type, contact), start: data.start, end,
-      location: data.location || (isRemote ? 'Microsoft Teams' : (type === 'Phone call' ? 'Phone' : s.officeLocation)),
-      is_remote: isRemote, contact_id: contact ? contact.id : null, deal_id: dealId, home_id: data.home_id || null,
+      location: data.location || (isRemote ? 'Google Meet' : (CALL_TYPES.includes(type) ? 'Phone' : s.officeLocation)),
+      is_remote: isRemote, contact_id: contact ? contact.id : null, deal_id: dealId,
       notes: data.notes, send_invite: data.send_invite === false || data.send_invite === 0 ? 0 : 1,
-      sync_status: graph().isConnected(owner) ? 'Pending' : 'Local', owner_id: owner
+      sync_status: graph().isConnected(owner) && s.calendarSync !== false ? 'Pending' : 'Local', owner_id: owner
     });
     if (contact) {
       insert('interactions', { contact_id: contact.id, deal_id: dealId, type: 'Appointment', at: U.nowLocal(), appointment_id: id,
         summary: `${type} booked for ${fmtWhen(data.start)}.` });
       touchContact(contact.id);
     }
-    if (dealId && type === 'Handover') advanceDeal(dealId, 'Siting & Handover', { reason: 'handover booked' });
-    else if (dealId && type !== 'Phone call') advanceDeal(dealId, 'Appointment', { reason: `${type.toLowerCase()} booked` });
-    if (type === 'Part-ex valuation' && dealId) {
-      const d = get('deals', dealId);
-      if (d && d.deal_type === 'New sale' && contact && contact.type === 'Owner') update('deals', dealId, { deal_type: 'Upgrade with part-ex' });
-    }
+    if (dealId && TOUR_TYPES.includes(type)) advanceDeal(dealId, 'Demo booked', { reason: `${type.toLowerCase()} booked` });
     syncAutoTasks(get('appointments', id));
     return id;
   });
@@ -452,7 +438,7 @@ function updateAppointment(id, data) {
   const a = get('appointments', id);
   if (!a) throw httpError(404, 'Appointment not found');
   const patch = {};
-  for (const k of ['title', 'type', 'location', 'notes', 'is_remote', 'home_id', 'deal_id', 'contact_id']) if (k in data) patch[k] = data[k];
+  for (const k of ['title', 'type', 'location', 'notes', 'is_remote', 'deal_id', 'contact_id']) if (k in data) patch[k] = data[k];
   if (data.start) {
     patch.start = data.start;
     const dur = U.minutesOf(a.end.slice(11)) - U.minutesOf(a.start.slice(11)) + (a.end.slice(0, 10) !== a.start.slice(0, 10) ? 1440 : 0);
@@ -461,7 +447,7 @@ function updateAppointment(id, data) {
   if ('needs_review' in data) patch.needs_review = data.needs_review ? 1 : 0;
   if ('conflict_note' in data) patch.conflict_note = data.conflict_note;
   const moved = patch.start && patch.start !== a.start;
-  if (graph().isConnected(a.owner_id) && a.status === 'Scheduled') patch.sync_status = 'Pending';
+  if (graph().isConnected(a.owner_id) && a.status === 'Scheduled' && getSettings().calendarSync !== false) patch.sync_status = 'Pending';
   update('appointments', id, patch);
   const now = get('appointments', id);
   if (moved && now.contact_id) {
@@ -482,8 +468,8 @@ function cancelAppointment(id, { message, fromOutlook = false } = {}) {
     db.prepare("UPDATE tasks SET status = 'Dropped', drop_reason = 'Appointment cancelled', completed_at = ? WHERE appointment_id = ? AND status = 'Open' AND auto_key IS NOT NULL").run(U.nowStamp(), id);
     if (a.contact_id) {
       insert('interactions', { contact_id: a.contact_id, deal_id: a.deal_id, type: 'Appointment', at: U.nowLocal(), appointment_id: id,
-        summary: `${a.type} on ${fmtWhen(a.start)} cancelled${fromOutlook ? ' in Outlook' : ''}${message ? ': ' + message : '.'}` });
-      if (fromOutlook || a.type === 'Park tour') {
+        summary: `${a.type} on ${fmtWhen(a.start)} cancelled${fromOutlook ? ' in Google Calendar' : ''}${message ? ': ' + message : '.'}` });
+      if (fromOutlook || TOUR_TYPES.includes(a.type)) {
         const c = get('contacts', a.contact_id);
         createTask({ title: `Rebook ${a.type.toLowerCase()} with ${c ? (c.first_name + ' ' + c.last_name).trim() : 'customer'}`, category: 'Follow-up', priority: 'High',
           due_date: U.today(), contact_id: a.contact_id, deal_id: a.deal_id, auto_key: `appt:${id}:rebook`, owner_id: a.owner_id });
@@ -494,17 +480,23 @@ function cancelAppointment(id, { message, fromOutlook = false } = {}) {
   graph().queueTodoSync();
 }
 
+// Records how an appointment went. For a demo or site visit:
+//   result 'held'    -> deal moves to Demo held (and Proposal sent if one went out), with the product,
+//                       plan, monthly price and agreed next step saved;
+//   result 'not_fit' -> deal closed as Lost ("Not a fit");
+//   result 'no_show' -> a "Rebook" call is added to today's list.
 function recordOutcome(id, input = {}) {
-  const { outcome, notes, nextStage, result, quote_price, home_id, payment_type, payment_amount, next_steps, next_step_date } = input;
+  const { outcome, notes, nextStage, result, product, plan, monthly, proposal_sent, next_steps, next_step_date } = input;
   const a = get('appointments', id);
   if (!a) throw httpError(404, 'Appointment not found');
   const s = getSettings();
   const money = v => '£' + Number(v).toLocaleString('en-GB');
-  const isTour = a.type === 'Park tour' && !!result;
+  const isDemo = TOUR_TYPES.includes(a.type) && !!result;
   const parts = [outcome];
-  if (isTour && result === 'presented') {
-    if (quote_price) parts.push(`quoted ${money(quote_price)}`);
-    if (payment_type && payment_type !== 'None yet') parts.push(`${payment_type.toLowerCase()}${payment_amount ? ' ' + money(payment_amount) : ''} taken`);
+  if (isDemo && result === 'held') {
+    if (product && product !== 'Not decided yet') parts.push(`interested in ${product}${plan ? ' ' + plan : ''}`);
+    if (monthly) parts.push(`${money(monthly)}/month discussed`);
+    if (proposal_sent) parts.push('proposal sent');
     if (next_steps) parts.push(`next: ${next_steps}${next_step_date ? ' (' + fmtWhen(next_step_date + 'T09:00').split(',')[0] + ')' : ''}`);
   }
   const summary = parts.filter(Boolean).join('; ');
@@ -518,49 +510,39 @@ function recordOutcome(id, input = {}) {
     }
     db.prepare("UPDATE tasks SET status = 'Done', completed_at = ? WHERE auto_key = ? AND status = 'Open'").run(U.nowStamp(), `appt:${id}:prep`);
     const follow = db.prepare("SELECT * FROM tasks WHERE auto_key = ? AND status = 'Open'").get(`appt:${id}:follow`);
+    const name = () => { const c = get('contacts', a.contact_id); return c ? (c.first_name + ' ' + c.last_name).trim() : 'them'; };
 
-    if (isTour && a.contact_id) {
+    if (isDemo && a.contact_id) {
       if (!dealId && result !== 'no_show') { dealId = ensureDeal(a.contact_id); update('appointments', id, { deal_id: dealId }, { touch: false }); }
-      if (result === 'not_right') {
-        if (follow) update('tasks', follow.id, { status: 'Dropped', drop_reason: 'Park not right for customer', completed_at: U.nowStamp() });
-        setDealStage(dealId, 'Lost', { lostReason: 'Park not right for customer' });
+      if (result === 'not_fit') {
+        if (follow) update('tasks', follow.id, { status: 'Dropped', drop_reason: 'Not a fit', completed_at: U.nowStamp() });
+        setDealStage(dealId, 'Lost', { lostReason: 'Not a fit' });
       } else if (result === 'no_show') {
         if (follow) update('tasks', follow.id, { status: 'Dropped', drop_reason: 'Did not attend', completed_at: U.nowStamp() });
-        const c = get('contacts', a.contact_id);
-        createTask({ title: `Rebook park tour with ${c ? (c.first_name + ' ' + c.last_name).trim() : 'customer'}`, category: 'Call', priority: 'High',
+        createTask({ title: `Rebook ${a.type.toLowerCase()} with ${name()}`, category: 'Call', priority: 'High',
           due_date: U.today(), contact_id: a.contact_id, deal_id: dealId, auto_key: `appt:${id}:rebook`, owner_id: a.owner_id });
       } else {
         const patch = {};
-        if (quote_price) patch.price = Number(quote_price);
-        if (home_id) patch.home_id = Number(home_id);
-        if (payment_type) patch.payment_status = payment_type;
-        if (payment_amount) patch.deposit = Number(payment_amount);
+        if (product) patch.deal_type = product;
+        if (plan) patch.plan = plan;
+        if (monthly) patch.price = Number(monthly);
         if (Object.keys(patch).length) update('deals', dealId, patch);
-        // The tour's own follow-up becomes the agreed next step (or the standard follow-up if none was agreed).
+        // The demo's own follow-up becomes the agreed next step (or the standard stage task if none was agreed).
         if (next_steps) {
           const due = next_step_date && next_step_date >= U.today() ? next_step_date : U.nextOpenDay(U.addDays(U.today(), 2), s.closedDays);
           if (follow) update('tasks', follow.id, { title: `Next step: ${next_steps}`, due_date: due, original_due_date: null, deal_id: dealId });
           else createTask({ title: `Next step: ${next_steps}`, category: 'Follow-up', priority: 'High', due_date: due, contact_id: a.contact_id, deal_id: dealId, owner_id: a.owner_id });
         } else if (follow) update('tasks', follow.id, { status: 'Dropped', drop_reason: 'Replaced by stage task', completed_at: U.nowStamp() });
-        advanceDeal(dealId, 'Park Tour', { skipTasks: !!next_steps, reason: 'presentation given' });
-        if (payment_type === 'Deposit' || payment_type === 'Paid in full') advanceDeal(dealId, 'Finance & Paperwork', { reason: `${payment_type.toLowerCase()} taken` });
+        advanceDeal(dealId, 'Demo held', { skipTasks: !!next_steps || !!proposal_sent, reason: `${a.type.toLowerCase()} held` });
+        if (proposal_sent) advanceDeal(dealId, 'Proposal sent', { reason: 'proposal sent after the ' + a.type.toLowerCase() });
       }
-    } else {
-      if (follow) update('tasks', follow.id, { title: `Follow up: ${summary}` });
-      if (a.type === 'Handover' && dealId && /keys|handed over|complete/i.test(outcome || '')) advanceDeal(dealId, 'Completed', { reason: 'keys handed over' });
-    }
+    } else if (follow) update('tasks', follow.id, { title: `Follow up: ${summary}` });
   });
   if (nextStage && dealId) {
     const d = get('deals', dealId);
     if (d && d.stage !== nextStage) setDealStage(dealId, nextStage);
   }
   graph().queueTodoSync();
-}
-
-// A deal's payment was recorded (deposit or paid in full) outside a park tour.
-function paymentRecorded(dealId, paymentStatus) {
-  if (paymentStatus === 'Deposit' || paymentStatus === 'Paid in full') return advanceDeal(dealId, 'Finance & Paperwork', { reason: `${paymentStatus.toLowerCase()} taken` });
-  return false;
 }
 
 function fmtWhen(dt) {
@@ -574,7 +556,7 @@ function fmtWhen(dt) {
 function httpError(status, message) { const e = new Error(message); e.status = status; return e; }
 
 module.exports = {
-  STAGES, OPEN_STAGES, APPT_TYPES, funnel, CATEGORIES, PRIORITIES, LEAD_STATUSES, PAYMENT_STATUSES, advanceDeal, ensureDeal, paymentRecorded,
+  STAGES, OPEN_STAGES, APPT_TYPES, REMOTE_TYPES, CALL_TYPES, TOUR_TYPES, PRODUCTS, PLANS, LOST_REASONS, funnel, CATEGORIES, PRIORITIES, LEAD_STATUSES, advanceDeal, ensureDeal,
   urgencyOf, decorateTask, rollOverTasks, maybeScheduledRollover, createTask, completeTask, snoozeTask, reviewTask,
   addInteraction, logCall, mergeContacts, touchContact, setDealStage, assignContacts,
   suggestSlots, createAppointment, updateAppointment, cancelAppointment, recordOutcome, fmtWhen, httpError, syncAutoTasks

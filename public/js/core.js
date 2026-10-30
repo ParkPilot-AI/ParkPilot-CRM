@@ -3,14 +3,14 @@
 export const state = { meta: null };
 
 export async function api(method, url, body, { raw = false, headers = {} } = {}) {
-  const opts = { method, headers: { 'X-Coastfields': '1', 'X-Requested-With': 'XMLHttpRequest', ...headers }, credentials: 'same-origin' };
+  const opts = { method, headers: { 'X-ParkPilot': '1', 'X-Requested-With': 'XMLHttpRequest', ...headers }, credentials: 'same-origin' };
   if (body !== undefined) {
     if (raw) opts.body = body;
     else { opts.body = JSON.stringify(body); opts.headers['Content-Type'] = 'application/json'; }
   }
   let res;
   try { res = await fetch(url, opts); }
-  catch { const e = new Error('The portal is not responding. Check the Coastfields window is still open.'); toast(e.message, { error: true }); throw e; }
+  catch { const e = new Error('The CRM is not responding. Check your internet connection.'); toast(e.message, { error: true }); throw e; }
   const j = await res.json().catch(() => ({}));
   if (res.status === 401 && j.signIn) { location.href = '/auth/login?return=' + encodeURIComponent('/' + location.hash); const e = new Error('Signing you in…'); e.status = 401; e.silent = true; throw e; }
   if (res.status === 403 && j.noAccess) { showNoAccess(j.error); const e = new Error(j.error); e.status = 403; throw e; }
@@ -76,9 +76,10 @@ export function fmtAgo(dt) {
   return `${Math.round(n / 365)} years ago`;
 }
 export const money = v => (v === null || v === undefined || v === '') ? '' : '£' + Number(v).toLocaleString('en-GB', { maximumFractionDigits: 0 });
-export const fullName = o => `${o.first_name || ''} ${o.last_name || ''}`.trim() || 'Unnamed contact';
-export const initials = o => ((o.first_name || '?')[0] + (o.last_name || '')[0] || '').toUpperCase();
+export const fullName = o => `${o.first_name || ''} ${o.last_name || ''}`.trim() || o.company || 'Unnamed lead';
+export const initials = o => ((o.first_name || o.company || '?')[0] + ((o.last_name || '')[0] || '')).toUpperCase();
 export const typeClass = t => 'ty-' + String(t || '').replace(/[^A-Za-z]+/g, '-');
+export const plans = product => ((state.meta && state.meta.plans) || {})[product] || [];
 export const telHref = c => c.phone_e164 || c.mobile ? `tel:${esc(c.phone_e164 || c.mobile)}` : null;
 export const plural = (n, w, p = w + 's') => `${n} ${n === 1 ? w : p}`;
 
@@ -227,12 +228,12 @@ export function contactPicker(holder, { name = 'contact_id', value = null, label
       holder.querySelector('[data-clear]').onclick = () => { delete holder.dataset.id; render(); holder.querySelector('input').focus(); onPick && onPick(null); };
       return;
     }
-    holder.innerHTML = `<div class="picker"><input class="input" type="text" placeholder="Type a name, phone or email" autocomplete="off" aria-label="Contact"><div class="opts hidden"></div></div>`;
+    holder.innerHTML = `<div class="picker"><input class="input" type="text" placeholder="Type a name, park, phone or email" autocomplete="off" aria-label="Lead"><div class="opts hidden"></div></div>`;
     const input = holder.querySelector('input'), opts = holder.querySelector('.opts');
     let timer, results = [], sel = -1;
     const show = () => {
-      opts.innerHTML = results.map((c, i) => `<button type="button" data-i="${i}" class="${i === sel ? 'sel' : ''}"><b>${esc(fullName(c))}</b> <span class="faint small">${esc(c.mobile || c.email || c.lead_no || '')}</span></button>`).join('')
-        + (allowNew && input.value.trim().length > 1 ? `<button type="button" data-new><b>+ New contact</b> <span class="faint small">"${esc(input.value.trim())}"</span></button>` : '');
+      opts.innerHTML = results.map((c, i) => `<button type="button" data-i="${i}" class="${i === sel ? 'sel' : ''}"><b>${esc(fullName(c))}</b> <span class="faint small">${esc([c.first_name || c.last_name ? c.company : null, c.mobile || c.email || c.lead_no].filter(Boolean).join(' · '))}</span></button>`).join('')
+        + (allowNew && input.value.trim().length > 1 ? `<button type="button" data-new><b>+ New lead</b> <span class="faint small">"${esc(input.value.trim())}"</span></button>` : '');
       opts.classList.toggle('hidden', !opts.innerHTML);
     };
     input.addEventListener('input', () => {
@@ -254,7 +255,7 @@ export function contactPicker(holder, { name = 'contact_id', value = null, label
       const b = e.target.closest('button'); if (!b) return;
       if (b.dataset.new !== undefined) {
         const [first, ...rest] = input.value.trim().split(/\s+/);
-        const c = await post('/api/contacts', { first_name: first, last_name: rest.join(' '), lead_source: 'PHONE' });
+        const c = await post('/api/contacts', { first_name: first, last_name: rest.join(' '), lead_source: 'Phone' });
         toast(`Created ${fullName(c)}`);
         pick(c);
       } else pick(results[+b.dataset.i]);

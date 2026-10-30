@@ -3,9 +3,9 @@
 const os = require('node:os'), path = require('node:path'), fs = require('node:fs');
 const test = require('node:test');
 const assert = require('node:assert');
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'coastfields-blobs-'));
-process.env.COASTFIELDS_STORE = 'netlify';
-delete process.env.COASTFIELDS_DATA;
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'parkpilot-blobs-'));
+process.env.PARKPILOT_STORE = 'netlify';
+delete process.env.PARKPILOT_DATA;
 
 let server, store, ConflictError;
 test.before(async () => {
@@ -40,7 +40,7 @@ test('first save, read back, and conditional saves', async () => {
 test('daily backups are written once per day', async () => {
   assert.equal(await store.backup(Buffer.from('b1'), '2026-10-24'), true);
   assert.equal(await store.backup(Buffer.from('b2'), '2026-10-24'), false);
-  assert.deepEqual(await store.listBackups(), ['backups/coastfields-2026-10-24.db']);
+  assert.deepEqual(await store.listBackups(), ['backups/parkpilot-crm-2026-10-24.db']);
 });
 
 test('the Outlook "sync needed" flag', async () => {

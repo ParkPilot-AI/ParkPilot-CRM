@@ -3,17 +3,27 @@ const { db, tx, insert, update, getSettings, logJob } = require('./db');
 const { readFirstSheet, serialToLocal, readCsv } = require('./xlsx');
 const { normalisePhone, today, addDays, nowStamp } = require('./util');
 
+// Recognised column headings (first match wins). Anything else in the sheet is ignored.
 const HEADER_MAP = {
-  external_id: [/elitelead$/i, /^\(do not modify\).*lead$/i, /^lead id$/i],
-  modified_on: [/modified on/i],
+  external_id: [/^\(do not modify\).*lead$/i, /^lead id$/i, /^external id$/i],
   lead_no: [/^no$/i, /^lead no/i, /^lead number/i],
   first_name: [/^first name$/i, /^forename$/i],
   last_name: [/^last name$/i, /^surname$/i],
-  mobile: [/mobile/i, /^phone$/i, /telephone/i],
+  full_name: [/^(full |contact )?name$/i],
+  company: [/^park( name)?$/i, /^company( name)?$/i, /^business( name)?$/i, /^organi[sz]ation$/i, /^account( name)?$/i],
+  job_title: [/job title/i, /^role$/i, /^position$/i],
+  units: [/units/i, /pitches/i, /holiday homes/i],
+  sites: [/no\.? of parks/i, /number of parks/i, /^sites$/i, /^parks$/i],
+  region: [/^county$/i, /^region$/i, /^location$/i, /^town$/i, /^city$/i],
+  website: [/website/i, /^url$/i, /^web$/i],
+  interest: [/interest/i, /^product/i],
+  current_systems: [/current (system|pms|crm|software)/i, /^pms$/i, /^crm$/i],
+  mobile: [/mobile/i, /^phone/i, /telephone/i],
   email: [/e-?mail/i],
   lead_source: [/lead source/i, /^source$/i],
-  enquiry_date: [/^created on$/i, /enquiry date/i, /^created$/i],
-  postcode: [/post ?code/i]
+  enquiry_date: [/^created on$/i, /enquiry date/i, /^created$/i, /^date$/i],
+  postcode: [/post ?code/i],
+  notes: [/^notes?$/i, /^comments?$/i]
 };
 
 function mapHeaders(header) {
@@ -47,14 +57,15 @@ function asDate(v) {
 function importRows(rows, { fileName = 'import', parkId = null, ownerId = null } = {}) {
   if (!rows.length) throw new Error('The file is empty.');
   const map = mapHeaders(rows[0]);
-  if (map.first_name === undefined && map.last_name === undefined && map.email === undefined)
-    throw new Error('Could not find name or email columns. Expected headings such as "First Name", "Last Name", "Email Address".');
+  if (map.first_name === undefined && map.last_name === undefined && map.full_name === undefined && map.email === undefined && map.company === undefined)
+    throw new Error('Could not find name, park or email columns. Expected headings such as "First Name", "Last Name", "Park Name", "Email".');
   const settings = getSettings();
   const activeFrom = addDays(today(), -settings.activeLeadDays);
   const stats = { rows: rows.length - 1, created: 0, updated: 0, unchanged: 0, skipped: 0, deals: 0 };
 
   const findByExt = db.prepare('SELECT * FROM contacts WHERE external_id = ?');
   const findByLead = db.prepare('SELECT * FROM contacts WHERE lead_no = ?');
+  const findByEmail = db.prepare('SELECT * FROM contacts WHERE lower(email) = ? ORDER BY id LIMIT 1');
   const wasMerged = db.prepare('SELECT 1 FROM sync_state WHERE key = ?');
   const now = nowStamp();
 
@@ -62,17 +73,24 @@ function importRows(rows, { fileName = 'import', parkId = null, ownerId = null }
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
       const val = f => (map[f] === undefined ? null : r[map[f]]);
-      const first = tidyName(val('first_name')), last = tidyName(val('last_name'));
+      let first = tidyName(val('first_name')), last = tidyName(val('last_name'));
+      if (!first && !last && val('full_name')) { const parts = tidyName(val('full_name')).split(' '); first = parts[0]; last = parts.slice(1).join(' '); }
       const email = val('email') ? String(val('email')).trim().toLowerCase() : null;
       const mobile = val('mobile') ? String(val('mobile')).trim() : null;
-      if (!first && !last && !email && !mobile) { stats.skipped++; continue; }
+      const text = f => (val(f) === null || val(f) === undefined || String(val(f)).trim() === '' ? null : String(val(f)).trim());
+      const num = f => { const m = String(val(f) ?? '').match(/\d[\d,]*/); return m ? Number(m[0].replace(/,/g, '')) : null; };
+      const extra = { company: text('company'), job_title: text('job_title'), units: num('units'), sites: num('sites'), region: text('region'),
+        website: text('website'), current_systems: text('current_systems'), postcode: text('postcode') };
+      const interestRaw = String(val('interest') || '').toLowerCase();
+      extra.interest = /crm/.test(interestRaw) && /\bai\b|agent/.test(interestRaw) ? 'AI + CRM' : /crm/.test(interestRaw) ? 'ParkPilot CRM' : /\bai\b|agent/.test(interestRaw) ? 'ParkPilot AI' : null;
+      if (!first && !last && !email && !mobile && !extra.company) { stats.skipped++; continue; }
       const ext = val('external_id') ? String(val('external_id')).trim() : null;
       const leadNo = val('lead_no') ? String(val('lead_no')).trim() : null;
       const enquiry = asDate(val('enquiry_date'));
       const source = val('lead_source') ? String(val('lead_source')).trim() : null;
 
       if (ext && wasMerged.get('merged:' + ext)) { stats.unchanged++; continue; }
-      const existing = (ext && findByExt.get(ext)) || (leadNo && findByLead.get(leadNo)) || null;
+      const existing = (ext && findByExt.get(ext)) || (leadNo && findByLead.get(leadNo)) || (email && findByEmail.get(email)) || null;
       if (existing) {
         // Fill gaps only: never overwrite something edited in the portal.
         const patch = {};
@@ -83,6 +101,7 @@ function importRows(rows, { fileName = 'import', parkId = null, ownerId = null }
         if (!existing.lead_source && source) patch.lead_source = source;
         if (!existing.lead_no && leadNo && !findByLead.get(leadNo)) patch.lead_no = leadNo;
         if (!existing.external_id && ext) patch.external_id = ext;
+        for (const [k, v] of Object.entries(extra)) if ((existing[k] === null || existing[k] === '') && v !== null) patch[k] = v;
         if (Object.keys(patch).length) { update('contacts', existing.id, patch); stats.updated++; }
         else stats.unchanged++;
         continue;
@@ -91,16 +110,16 @@ function importRows(rows, { fileName = 'import', parkId = null, ownerId = null }
       const active = day >= activeFrom;
       const id = insert('contacts', {
         external_id: ext, lead_no: leadNo, type: 'Prospect', first_name: first, last_name: last,
-        mobile, phone_e164: normalisePhone(mobile), email, lead_source: source,
+        mobile, phone_e164: normalisePhone(mobile), email, lead_source: source || 'Import', ...extra,
         lead_status: active ? 'New' : 'Dormant', enquiry_date: enquiry, created_at: enquiry ? enquiry + ':00' : now,
         park_id: parkId || (db.prepare('SELECT MIN(id) id FROM parks').get() || {}).id || null, owner_id: ownerId, assigned_at: ownerId ? now : null
       });
       insert('interactions', {
         contact_id: id, type: 'Note', at: enquiry || now.slice(0, 16),
-        summary: `Enquiry recorded in previous CRM${leadNo ? ' (' + leadNo + ')' : ''}${source ? ', source ' + source : ''}.`
+        summary: `Imported from ${fileName}${leadNo ? ' (' + leadNo + ')' : ''}${source ? ', source ' + source : ''}.${text('notes') ? '\n' + text('notes') : ''}`
       });
       if (active) {
-        insert('deals', { contact_id: id, deal_type: 'New sale', stage: 'Enquiry', stage_changed_at: enquiry || now, created_at: enquiry ? enquiry + ':00' : now });
+        insert('deals', { contact_id: id, deal_type: extra.interest || 'Not decided yet', stage: 'Enquiry', furthest_stage: 'Enquiry', stage_changed_at: enquiry || now, created_at: enquiry ? enquiry + ':00' : now });
         stats.deals++;
       }
       stats.created++;
