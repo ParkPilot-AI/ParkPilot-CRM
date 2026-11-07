@@ -4,10 +4,9 @@ import { get, esc, money, plural } from '../core.js';
 // Text colour is chosen per band for contrast.
 const BANDS = {
   'Enquiry': ['#E6D9BF', 'var(--ink)'],
-  'Demo booked': ['#D9C7A3', 'var(--ink)'],
-  'Demo held': ['#3E4A5C', '#fff'],
-  'Proposal sent': ['#0E1A2B', '#fff'],
-  'Won': ['#2D7A4F', '#fff']
+  'Appointment': ['#D9C7A3', 'var(--ink)'],
+  'Presentation': ['#0E1A2B', '#fff'],
+  'Closed Won': ['#2D7A4F', '#fff']
 };
 const PERIODS = [['30', '30 days'], ['90', '90 days'], ['365', '1 year'], ['all', 'All time']];
 // Band widths use a square-root scale above a minimum, so the funnel keeps its shape (each stage
@@ -25,10 +24,10 @@ export function funnelHtml(f) {
     const inset = Math.max(0, ((1 - next / w) / 2) * 100).toFixed(1);
     const [bg, fg] = BANDS[s.stage] || ['#0E1A2B', '#fff'];
     const link = `#/contacts?stage=${encodeURIComponent(s.stage)}`;
-    return `<a class="f-row" href="${link}" aria-label="${esc(s.stage)}: ${s.reached} reached, ${s.now} ${i === 0 ? 'with no demo yet' : 'here now'}">
+    return `<a class="f-row" href="${link}" aria-label="${esc(s.stage)}: ${s.reached} reached, ${s.now} ${i === 0 ? 'with no appointment yet' : 'here now'}">
       <div class="f-track"><div class="f-band" style="width:${w}%;--inset:${inset}%;background:${bg};color:${fg}"><span class="f-name">${esc(s.stage)}</span><b>${s.reached.toLocaleString('en-GB')}</b></div></div>
       <div class="f-side"><span class="f-mname">${esc(s.stage)}</span>${i === 0 ? `<b>${s.reached.toLocaleString('en-GB')}</b> ${s.reached === 1 ? 'enquiry' : 'enquiries'}` : `<b>${s.conversion}%</b> of the stage above`}
-        <span>${s.stage === 'Won' ? `${s.now} won` : i === 0 ? `${s.now.toLocaleString('en-GB')} no demo yet` : `${s.now} here now`}${s.value ? ` · ${money(s.value)}/month` : ''}</span></div>
+        <span>${s.stage === 'Closed Won' ? `${s.now} won` : i === 0 ? `${s.now.toLocaleString('en-GB')} no appointment yet` : `${s.now} here now`}${s.value ? ` · ${money(s.value)}/month` : ''}</span></div>
     </a>`;
   }).join('');
   const rate = f.stages[0].reached ? Math.round(100 * completed.reached / f.stages[0].reached) : 0;

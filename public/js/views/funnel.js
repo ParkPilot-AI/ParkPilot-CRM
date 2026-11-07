@@ -3,7 +3,7 @@ import { moveStage } from '../dialogs.js';
 import { mountFunnel } from './funnelchart.js';
 
 let showClosed = false;
-let phoneStage = 'Demo booked'; // phones show one stage at a time
+let phoneStage = 'Appointment'; // phones show one stage at a time
 let owner = '', park = ''; // managers: whose deals (''=everyone they can see, 'none', 'me' or a user id)
 
 export async function render(el) {
@@ -19,7 +19,7 @@ export async function render(el) {
     <div class="today-head"><h1>Pipeline</h1>
       <span class="muted">${m.openStages.reduce((s, st) => s + data[st].count, 0)} open deals${openValue ? `, <span class="mrr">${money(openValue)}/month</span> (${money(openValue * 12)} a year)` : ''}</span>
       <div class="spacer"></div>
-      <label class="check small"><input type="checkbox" data-closed ${showClosed ? 'checked' : ''}> Show won and lost (${data.Won.count + data.Lost.count})</label>
+      <label class="check small"><input type="checkbox" data-closed ${showClosed ? 'checked' : ''}> Show closed won and lost (${data['Closed Won'].count + data['Closed Lost'].count})</label>
     </div>
     ${mgr && (m.team || []).length > 1 ? `<div class="toolbar funnel-filters"><label class="small muted">Showing <select data-owner aria-label="Whose deals">
         <option value=""${!owner ? ' selected' : ''}>Everyone</option><option value="me"${owner === 'me' ? ' selected' : ''}>Just mine</option><option value="none"${owner === 'none' ? ' selected' : ''}>Unallocated leads</option>
@@ -27,7 +27,7 @@ export async function render(el) {
       ${isGroupMgr() && (m.parks || []).length > 1 ? `<label class="small muted">Team <select data-park>${parkOptions(park, { blank: 'All teams' })}</select></label>` : ''}</div>` : ''}
     <section class="panel" style="margin-bottom:18px"><div class="panel-body" style="padding-top:16px" data-funnel></div></section>
     <h2 style="margin:0 0 4px">Deals by stage</h2>
-    <p class="faint small" style="margin:0 0 12px">Deals move on automatically as you book and record demos. ${phone ? 'Use “Move” on a card to change its stage yourself.' : 'You can also drag a card, or use “Move”, to change its stage yourself.'}</p>
+    <p class="faint small" style="margin:0 0 12px">Deals move on automatically as you book appointments and record how they went. ${phone ? 'Use “Move” on a card to change its stage yourself.' : 'You can also drag a card, or use “Move”, to change its stage yourself.'}</p>
     ${phone ? `<div class="stage-tabs" role="tablist">${stages.map(st => `<button type="button" role="tab" class="chip${st === phoneStage ? ' on' : ''}" data-tab="${esc(st)}" aria-selected="${st === phoneStage}">${esc(st)} <span class="n">${data[st].count}</span></button>`).join('')}</div>` : ''}
     <div class="board${phone ? ' one' : ''}">${(phone ? [phoneStage] : stages).map(st => {
       const col = data[st];
@@ -49,7 +49,7 @@ export async function render(el) {
   el.querySelectorAll('[data-move]').forEach(b => b.addEventListener('click', e => {
     e.stopPropagation();
     const from = b.closest('.card').dataset.from;
-    popMenu(b, m.stages.filter(st => st !== from).map(st => ({ label: st, icon: st === 'Lost' ? 'x' : 'deal', danger: st === 'Lost', run: () => moveStage({ id: Number(b.dataset.move) }, st) })), { title: 'Move to' });
+    popMenu(b, m.stages.filter(st => st !== from).map(st => ({ label: st, icon: st === 'Closed Lost' ? 'x' : 'deal', danger: st === 'Closed Lost', run: () => moveStage({ id: Number(b.dataset.move) }, st) })), { title: 'Move to' });
   }));
   el.querySelector('[data-owner]')?.addEventListener('change', e => { owner = e.target.value; render(el); });
   el.querySelector('[data-park]')?.addEventListener('change', e => { park = e.target.value; render(el); });

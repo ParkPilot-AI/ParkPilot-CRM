@@ -2,7 +2,7 @@
 
 ParkPilot's own sales CRM for tracking holiday park operators from first enquiry to signed customer.
 Leads arrive straight from Gmail, demos go into Google Calendar with a Meet link, and the pipeline
-runs **Enquiry → Demo booked → Demo held → Proposal sent → Won** (or Lost). Hosted on Netlify,
+runs **Enquiry → Appointment → Presentation → Closed Won** (or Closed Lost). Hosted on Netlify,
 signed in with Google.
 
 ## What it does

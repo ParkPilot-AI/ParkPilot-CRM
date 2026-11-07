@@ -87,7 +87,7 @@ test('slot suggestions avoid busy time and respect buffer', () => {
   assert.ok(slots[0].start >= `${tomorrow}T12:15`, 'first slot respects the 15-minute buffer');
 });
 
-test('booking a demo moves the deal to Demo booked, sets up Google Meet and creates prep and follow-up tasks', () => {
+test('booking a demo moves the deal to Appointment, sets up Google Meet and creates prep and follow-up tasks', () => {
   const start = `${U.addDays(day, 2)}T10:30`;
   const id = L.createAppointment({ type: 'Demo', start, contact_id: contactId });
   const a = get('appointments', id);
@@ -95,15 +95,15 @@ test('booking a demo moves the deal to Demo booked, sets up Google Meet and crea
   assert.equal(a.is_remote, 1);
   assert.equal(a.location, 'Google Meet');
   assert.equal(a.deal_id, dealId);
-  assert.equal(get('deals', dealId).stage, 'Demo booked');
+  assert.equal(get('deals', dealId).stage, 'Appointment');
   const auto = db.prepare('SELECT auto_key FROM tasks WHERE appointment_id = ? ORDER BY auto_key').all(id).map(r => r.auto_key);
   assert.deepEqual(auto, [`appt:${id}:follow`, `appt:${id}:prep`]);
   L.updateAppointment(id, { start: `${U.addDays(day, 4)}T14:00` });
   assert.equal(db.prepare('SELECT due_date FROM tasks WHERE auto_key = ?').get(`appt:${id}:follow`).due_date, U.addDays(day, 5));
-  // Demo held, interested in AI Professional, next step agreed -> Demo held with the next step as the task.
+  // Demo held, interested in AI Professional, next step agreed -> Presentation with the next step as the task.
   L.recordOutcome(id, { result: 'held', outcome: 'Demo held', product: 'ParkPilot AI', plan: 'Professional', monthly: 995, next_steps: 'Send proposal and case study', next_step_date: U.addDays(day, 6) });
   const d = get('deals', dealId);
-  assert.equal(d.stage, 'Demo held');
+  assert.equal(d.stage, 'Presentation');
   assert.equal(d.deal_type, 'ParkPilot AI');
   assert.equal(d.plan, 'Professional');
   assert.equal(d.price, 995);
@@ -113,46 +113,46 @@ test('booking a demo moves the deal to Demo booked, sets up Google Meet and crea
   assert.match(get('appointments', id).outcome, /£995\/month/);
 });
 
-test('a demo with the proposal sent goes to Proposal sent; winning makes them a customer with onboarding tasks', () => {
+test('a demo with the proposal sent goes to Presentation with a proposal follow-up; winning makes them a customer with onboarding tasks', () => {
   const c = insert('contacts', { first_name: 'Dee', last_name: 'Mo', company: 'Lakeside Lodges', interest: 'ParkPilot CRM' });
   const id = L.createAppointment({ type: 'Demo', start: `${U.addDays(day, 1)}T11:00`, contact_id: c });
   const dealOf = () => db.prepare('SELECT * FROM deals WHERE contact_id = ?').get(c);
-  assert.equal(dealOf().stage, 'Demo booked'); // a deal was created automatically for a contact with none
+  assert.equal(dealOf().stage, 'Appointment'); // a deal was created automatically for a contact with none
   assert.equal(dealOf().deal_type, 'ParkPilot CRM'); // from what they were interested in
   L.recordOutcome(id, { result: 'held', outcome: 'Demo held', plan: 'Professional', monthly: 299, proposal_sent: true });
   const d = dealOf();
-  assert.equal(d.stage, 'Proposal sent');
-  assert.equal(d.furthest_stage, 'Proposal sent');
+  assert.equal(d.stage, 'Presentation');
+  assert.equal(d.furthest_stage, 'Presentation');
   assert.ok(d.reserved_at);
   const titles = () => db.prepare("SELECT title FROM tasks WHERE deal_id = ? AND status = 'Open'").all(d.id).map(t => t.title);
   assert.ok(titles().includes('Follow up on proposal'));
   // Booking another call never moves it backwards.
   L.createAppointment({ type: 'Follow-up call', start: `${U.addDays(day, 3)}T15:00`, contact_id: c });
-  assert.equal(dealOf().stage, 'Proposal sent');
-  L.setDealStage(d.id, 'Won');
-  assert.equal(dealOf().stage, 'Won');
+  assert.equal(dealOf().stage, 'Presentation');
+  L.setDealStage(d.id, 'Closed Won');
+  assert.equal(dealOf().stage, 'Closed Won');
   assert.ok(dealOf().completed_at);
   assert.equal(get('contacts', c).type, 'Customer');
   assert.equal(get('contacts', c).lead_status, 'Customer');
   assert.ok(titles().includes('Kick off onboarding and introduce their account manager'));
 });
 
-test('not a fit closes the deal as Lost', () => {
+test('not a fit closes the deal as Closed Lost', () => {
   const c = insert('contacts', { first_name: 'Not', last_name: 'Fit' });
   const id = L.createAppointment({ type: 'Demo', start: `${U.addDays(day, 1)}T14:00`, contact_id: c });
   L.recordOutcome(id, { result: 'not_fit', outcome: 'Not a fit' });
   const d = db.prepare('SELECT * FROM deals WHERE contact_id = ?').get(c);
-  assert.equal(d.stage, 'Lost');
+  assert.equal(d.stage, 'Closed Lost');
   assert.equal(d.lost_reason, 'Not a fit');
   assert.equal(get('contacts', c).lead_status, 'Lost');
   assert.equal(db.prepare("SELECT COUNT(*) n FROM tasks WHERE contact_id = ? AND status = 'Open'").get(c).n, 0);
 });
 
-test('a no-show keeps the deal at Demo booked and adds a rebook call', () => {
+test('a no-show keeps the deal at Appointment and adds a rebook call', () => {
   const c = insert('contacts', { first_name: 'No', last_name: 'Show' });
   const id = L.createAppointment({ type: 'Demo', start: `${U.addDays(day, 1)}T16:00`, contact_id: c });
   L.recordOutcome(id, { result: 'no_show', outcome: 'Did not attend' });
-  assert.equal(db.prepare('SELECT stage FROM deals WHERE contact_id = ?').get(c).stage, 'Demo booked');
+  assert.equal(db.prepare('SELECT stage FROM deals WHERE contact_id = ?').get(c).stage, 'Appointment');
   assert.ok(db.prepare("SELECT 1 FROM tasks WHERE auto_key = ? AND status = 'Open'").get(`appt:${id}:rebook`));
 });
 
@@ -168,15 +168,15 @@ test('a discovery call does not move a lead along, and is a phone call by defaul
 test('the funnel counts how far deals got, including lost ones', () => {
   const f = L.funnel('all');
   const by = Object.fromEntries(f.stages.map(s => [s.stage, s]));
-  assert.deepEqual(f.stages.map(s => s.stage), ['Enquiry', 'Demo booked', 'Demo held', 'Proposal sent', 'Won']);
+  assert.deepEqual(f.stages.map(s => s.stage), ['Enquiry', 'Appointment', 'Presentation', 'Closed Won']);
   for (let i = 1; i < f.stages.length; i++) assert.ok(f.stages[i].reached <= f.stages[i - 1].reached);
   assert.equal(by.Enquiry.reached, f.total);
-  // The "not a fit" deal was lost after reaching Demo booked: still counted there.
+  // The "not a fit" deal was lost after reaching Appointment: still counted there.
   const nf = db.prepare("SELECT * FROM deals WHERE lost_reason = 'Not a fit'").get();
-  assert.equal(nf.furthest_stage, 'Demo booked');
+  assert.equal(nf.furthest_stage, 'Appointment');
   assert.ok(f.topLost.some(l => l.reason === 'Not a fit'));
-  assert.ok(by.Won.reached >= 1);
-  assert.equal(by['Proposal sent'].conversion, Math.round(100 * by['Proposal sent'].reached / by['Demo held'].reached));
+  assert.ok(by['Closed Won'].reached >= 1);
+  assert.equal(by.Presentation.conversion, Math.round(100 * by.Presentation.reached / by.Appointment.reached));
   const leads = db.prepare("SELECT COUNT(*) n FROM contacts WHERE type <> 'Partner'").get().n;
   assert.equal(f.total, leads);
   const before = L.funnel('all').total;
@@ -194,7 +194,7 @@ test('databases from the holiday-home portal are mapped onto the ParkPilot stage
   insert('appointments', { type: 'Park tour', title: 'Old', start: `${day}T09:00`, end: `${day}T10:00`, contact_id: c });
   db.prepare("INSERT INTO settings(key, value) VALUES('durations', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify({ 'Park tour': 90, Handover: 90 }));
   await D.open(D.exportBytes());
-  assert.deepEqual(ids.map(id => get('deals', id).stage), ['Demo booked', 'Demo held', 'Proposal sent', 'Proposal sent', 'Won']);
+  assert.deepEqual(ids.map(id => get('deals', id).stage), ['Appointment', 'Presentation', 'Presentation', 'Presentation', 'Closed Won']);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM appointments WHERE type = 'Park tour'").get().n, 0);
   assert.equal(D.getSettings().durations.Demo, 30);
   assert.equal(get('contacts', c).type, 'Customer');
@@ -225,3 +225,13 @@ test('merging duplicates moves activity to the kept record', () => {
 });
 
 test.after(() => { setState('x', null); db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+test('deals saved with the earlier Demo booked > Demo held > Proposal sent > Won stages are mapped across', async () => {
+  const D = require('../server/db');
+  const c = insert('contacts', { first_name: 'Earlier', last_name: 'Pipeline' });
+  const ids = ['Enquiry', 'Demo booked', 'Demo held', 'Proposal sent', 'Won', 'Lost']
+    .map(st => insert('deals', { contact_id: c, stage: st, furthest_stage: st === 'Lost' ? 'Demo held' : st }));
+  await D.open(D.exportBytes());
+  assert.deepEqual(ids.map(id => get('deals', id).stage), ['Enquiry', 'Appointment', 'Presentation', 'Presentation', 'Closed Won', 'Closed Lost']);
+  assert.deepEqual(ids.map(id => get('deals', id).furthest_stage), ['Enquiry', 'Appointment', 'Presentation', 'Presentation', 'Closed Won', 'Presentation']);
+});

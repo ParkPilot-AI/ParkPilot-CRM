@@ -240,7 +240,7 @@ export function outcomeDialog(a) {
         e.preventDefault();
         const d = formData(form);
         if (!d.outcome) { form.outcome.focus(); return; }
-        if (d.nextStage === 'Lost') { close(); await post(`/api/appointments/${a.id}/outcome`, { outcome: d.outcome, notes: d.notes }); lostDialog(a.deal_id); return; }
+        if (d.nextStage === 'Closed Lost') { close(); await post(`/api/appointments/${a.id}/outcome`, { outcome: d.outcome, notes: d.notes }); lostDialog(a.deal_id); return; }
         await post(`/api/appointments/${a.id}/outcome`, d);
         close(); toast('Outcome saved; follow-up task updated'); changed();
       });
@@ -249,8 +249,8 @@ export function outcomeDialog(a) {
 }
 
 // A demo (or site visit) is where the deal is shaped: what they'd buy, at what monthly price, and
-// what happens next. Recording it moves the deal to Demo held (or Proposal sent if one went out),
-// or closes it as Lost if ParkPilot isn't a fit.
+// what happens next. Recording it moves the deal to Presentation, or closes it as Closed Lost if
+// ParkPilot isn't a fit.
 export function demoOutcomeDialog(a) {
   const m = M();
   const results = [
@@ -276,7 +276,7 @@ export function demoOutcomeDialog(a) {
           <label class="field">By when<input type="date" name="next_step_date" value="${addDays(today(), 2)}"></label>
         </div>
       </div>
-      <div data-notfit class="callout warn hidden">The deal will be closed as <b>Lost</b> with the reason “Not a fit”.</div>
+      <div data-notfit class="callout warn hidden">The deal will be closed as <b>Closed Lost</b> with the reason “Not a fit”.</div>
       <div data-noshow class="callout hidden">The ${esc(a.type.toLowerCase())} will be marked as not attended and a “Rebook” call added to today’s list.</div>
       <label class="field">Notes (optional)<textarea name="notes" rows="2" placeholder="Their current systems, who else needs to sign off, objections"></textarea></label>`,
     foot: `<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save</button>`,
@@ -308,10 +308,9 @@ export function demoOutcomeDialog(a) {
         if (d.result === 'held') Object.assign(payload, { product: d.product, plan: d.plan, monthly: d.monthly, proposal_sent: d.proposal_sent, next_steps: d.next_steps, next_step_date: d.next_step_date });
         await post(`/api/appointments/${a.id}/outcome`, payload);
         close();
-        const msg = d.result === 'not_fit' ? 'Saved; deal closed as Lost (not a fit)'
+        const msg = d.result === 'not_fit' ? 'Saved; deal closed as Closed Lost (not a fit)'
           : d.result === 'no_show' ? 'Saved; rebook call added to today'
-          : d.proposal_sent ? 'Saved; deal moved to Proposal sent with a follow-up in 3 days'
-          : `Saved; deal moved to Demo held${d.next_steps ? ' with your next step as a task' : ' with “Send proposal” as a task'}`;
+          : `Saved; deal moved to Presentation${d.next_steps ? ' with your next step as a task' : d.proposal_sent ? ' with a proposal follow-up in 3 days' : ' with “Send proposal” as a task'}`;
         toast(msg); changed();
       });
     }
@@ -494,13 +493,13 @@ export function lostDialog(dealId) {
     foot: `<button class="btn" data-close>Cancel</button><button class="btn danger solid" type="submit">Mark as lost</button>`,
     onMount(root, close, form) {
       root.querySelector('[data-r]').addEventListener('click', e => { const b = e.target.closest('.chip'); if (b) form.reason.value = b.dataset.v; });
-      form.addEventListener('submit', async e => { e.preventDefault(); await post(`/api/deals/${dealId}/stage`, { stage: 'Lost', lostReason: form.reason.value }); close(); toast('Deal marked as lost'); changed(); });
+      form.addEventListener('submit', async e => { e.preventDefault(); await post(`/api/deals/${dealId}/stage`, { stage: 'Closed Lost', lostReason: form.reason.value }); close(); toast('Deal marked as lost'); changed(); });
     }
   });
 }
 
 export async function moveStage(deal, stage) {
-  if (stage === 'Lost') return lostDialog(deal.id);
+  if (stage === 'Closed Lost') return lostDialog(deal.id);
   await post(`/api/deals/${deal.id}/stage`, { stage });
   toast(`Moved to ${stage}`); changed();
 }
