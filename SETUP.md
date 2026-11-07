@@ -80,12 +80,13 @@ What happens to each email:
 
 ## Everyday use
 
-- **Today** – your tasks, today's diary, new leads and proposals waiting.
-- **Book** a demo from a lead's page → it goes into your Google Calendar with a Meet link, and the
-  customer gets an invite. The deal moves to **Demo booked**.
-- After the demo, click **Record outcome** → choose the plan and monthly price. The deal moves to
-  **Demo held** (or **Proposal sent**) and the next task is set for you.
-- Mark a deal **Won** from its card; onboarding tasks are added.
+- **Today** – your tasks, today's diary, new leads and deals awaiting a decision.
+- **Book** a demo or site visit from a lead's page → it goes into your Google Calendar with a Meet
+  link, and the customer gets an invite. The deal moves to **Appointment**.
+- After it, click **Record outcome** → choose the plan and monthly price. The deal moves to
+  **Presentation** and the next task is set for you (a proposal follow-up if you've already sent one).
+- Mark a deal **Won** from its card (it moves to **Closed Won**, and onboarding tasks are added) or
+  **Lost** (**Closed Lost**, with a reason).
 - Have an existing list of leads? **Settings → Import** takes a CSV or Excel file.
 
 ## If something goes wrong

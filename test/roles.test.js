@@ -120,7 +120,7 @@ test('work goes in the right diary; managers can see their teamâ€™s, others canâ
   // The booked demo moved the deal on and created prep/follow-up tasks for Ed.
   const tasks = (await ed.get('/api/tasks')).json;
   assert.ok(tasks.some(t => /Prepare for demo/.test(t.title)));
-  assert.equal((await ed.get(`/api/contacts/${ids.c1}`)).json.deals[0].stage, 'Demo booked');
+  assert.equal((await ed.get(`/api/contacts/${ids.c1}`)).json.deals[0].stage, 'Appointment');
   ids.appt = a.json.id;
 });
 

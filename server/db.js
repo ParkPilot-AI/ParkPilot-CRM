@@ -60,19 +60,22 @@ function migrate() {
   if (!cols('deals').includes('payment_status')) current.exec('ALTER TABLE deals ADD COLUMN payment_status TEXT');
   // The furthest stage a deal has reached (kept when it is lost), used to draw the sales funnel.
   if (!cols('deals').includes('furthest_stage')) current.exec('ALTER TABLE deals ADD COLUMN furthest_stage TEXT');
-  // ParkPilot pipeline: Enquiry > Demo booked > Demo held > Proposal sent > Won (or Lost).
-  // Databases started from the holiday-home portal are mapped across.
-  const stageMap = `CASE %s WHEN 'Appointment' THEN 'Demo booked' WHEN 'Viewing booked' THEN 'Demo booked'
-      WHEN 'Park Tour' THEN 'Demo held' WHEN 'Viewed' THEN 'Demo held' WHEN 'Proposal' THEN 'Proposal sent'
-      WHEN 'Finance & Paperwork' THEN 'Proposal sent' WHEN 'Reserved' THEN 'Proposal sent' WHEN 'Siting & Handover' THEN 'Proposal sent'
-      WHEN 'Completed' THEN 'Won' ELSE %s END`;
-  const oldStages = "('Appointment','Viewing booked','Park Tour','Viewed','Proposal','Finance & Paperwork','Reserved','Siting & Handover','Completed')";
+  // ParkPilot pipeline: Enquiry > Appointment > Presentation > Closed Won (or Closed Lost).
+  // Databases saved with earlier pipelines (the holiday-home portal's, and the earlier
+  // Demo booked > Demo held > Proposal sent > Won one) are mapped across.
+  const stageMap = `CASE %s WHEN 'Viewing booked' THEN 'Appointment' WHEN 'Demo booked' THEN 'Appointment'
+      WHEN 'Park Tour' THEN 'Presentation' WHEN 'Viewed' THEN 'Presentation' WHEN 'Demo held' THEN 'Presentation'
+      WHEN 'Proposal' THEN 'Presentation' WHEN 'Proposal sent' THEN 'Presentation' WHEN 'Finance & Paperwork' THEN 'Presentation'
+      WHEN 'Reserved' THEN 'Presentation' WHEN 'Siting & Handover' THEN 'Presentation'
+      WHEN 'Completed' THEN 'Closed Won' WHEN 'Won' THEN 'Closed Won' WHEN 'Lost' THEN 'Closed Lost' ELSE %s END`;
+  const oldStages = `('Viewing booked','Demo booked','Park Tour','Viewed','Demo held','Proposal','Proposal sent','Finance & Paperwork',
+      'Reserved','Siting & Handover','Completed','Won','Lost')`;
   current.exec(`UPDATE deals SET stage = ${stageMap.replace(/%s/g, 'stage')} WHERE stage IN ${oldStages}`);
   current.exec(`UPDATE deals SET furthest_stage = ${stageMap.replace(/%s/g, 'furthest_stage')} WHERE furthest_stage IN ${oldStages}`);
   current.exec(`UPDATE appointments SET type = CASE type WHEN 'Park tour' THEN 'Demo' WHEN 'Viewing' THEN 'Demo' WHEN 'Teams call' THEN 'Demo'
       WHEN 'Phone call' THEN 'Discovery call' WHEN 'Handover' THEN 'Onboarding call' ELSE 'Site visit' END
     WHERE type IN ('Park tour','Viewing','Teams call','Phone call','Handover','Part-ex valuation','Finance meeting')`);
-  current.exec("UPDATE deals SET furthest_stage = stage WHERE furthest_stage IS NULL AND stage <> 'Lost'");
+  current.exec("UPDATE deals SET furthest_stage = stage WHERE furthest_stage IS NULL AND stage <> 'Closed Lost'");
   current.exec("UPDATE contacts SET type = 'Customer' WHERE type = 'Owner'");
   current.exec("DELETE FROM settings WHERE key IN ('durations','todoMirror','officeLocation') AND value LIKE '%Park tour%'");
   const add = (t, c, def) => { if (!cols(t).includes(c)) current.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${def}`); };
@@ -97,10 +100,10 @@ function migrate() {
     const st = current.prepare('INSERT INTO parks(name, created_at, updated_at) VALUES(?, ?, ?)'); st.run(['ParkPilot', t, t]); st.free();
   }
   for (const t of ['contacts', 'homes', 'plots']) current.exec(`UPDATE ${t} SET park_id = (SELECT MIN(id) FROM parks) WHERE park_id IS NULL`);
-  // reserved_at: when a proposal first went out; completed_at: when the deal was won.
+  // reserved_at: when the deal first reached Presentation; completed_at: when the deal was won.
   current.exec(`UPDATE deals SET reserved_at = COALESCE(stage_changed_at, updated_at) WHERE reserved_at IS NULL
-                AND furthest_stage IN ('Proposal sent','Won')`);
-  current.exec("UPDATE deals SET completed_at = COALESCE(stage_changed_at, updated_at) WHERE completed_at IS NULL AND stage = 'Won'");
+                AND furthest_stage IN ('Presentation','Closed Won')`);
+  current.exec("UPDATE deals SET completed_at = COALESCE(stage_changed_at, updated_at) WHERE completed_at IS NULL AND stage = 'Closed Won'");
   leadNumbers();
 }
 

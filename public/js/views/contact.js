@@ -122,8 +122,8 @@ export async function render(el, { params }) {
     const dl = d.deals.find(x => String(x.id) === card.dataset.deal);
     card.querySelectorAll('[data-stage]').forEach(b => b.addEventListener('click', () => moveStage(dl, b.dataset.stage)));
     card.querySelector('[data-editdeal]').onclick = () => dealDialog({ deal: dl, contact: c });
-    card.querySelector('[data-won]')?.addEventListener('click', () => moveStage(dl, 'Won'));
-    card.querySelector('[data-lost]')?.addEventListener('click', () => moveStage(dl, 'Lost'));
+    card.querySelector('[data-won]')?.addEventListener('click', () => moveStage(dl, 'Closed Won'));
+    card.querySelector('[data-lost]')?.addEventListener('click', () => moveStage(dl, 'Closed Lost'));
     card.querySelector('[data-reopen]')?.addEventListener('click', () => moveStage(dl, 'Enquiry'));
   });
   el.querySelector('[data-merge]')?.addEventListener('click', async () => {
@@ -135,11 +135,11 @@ export async function render(el, { params }) {
 
 function dealCard(dl, m) {
   const idx = m.stages.indexOf(dl.stage);
-  const closed = dl.stage === 'Won' || dl.stage === 'Lost';
+  const closed = dl.stage === 'Closed Won' || dl.stage === 'Closed Lost';
   const next = !closed && idx < m.openStages.length ? m.stages[idx + 1] : null;
   return `<div class="deal" data-deal="${dl.id}">
-    <div class="top"><b>${esc(dl.deal_type)}${dl.plan ? ' · ' + esc(dl.plan) : ''}</b><span class="badge ${dl.stage === 'Lost' ? 'red' : dl.stage === 'Won' ? 'green' : 'blue'}">${esc(dl.stage)}</span></div>
-    ${!closed ? `<div class="stepper" role="group" aria-label="Move deal stage">${m.openStages.concat('Won').map((s, i) => `<button type="button" data-stage="${esc(s)}" class="${i < idx ? 'done' : i === idx ? 'cur' : ''}" title="${esc(s)}" aria-label="Move to ${esc(s)}"></button>`).join('')}</div>
+    <div class="top"><b>${esc(dl.deal_type)}${dl.plan ? ' · ' + esc(dl.plan) : ''}</b><span class="badge ${dl.stage === 'Closed Lost' ? 'red' : dl.stage === 'Closed Won' ? 'green' : 'blue'}">${esc(dl.stage)}</span></div>
+    ${!closed ? `<div class="stepper" role="group" aria-label="Move deal stage">${m.openStages.concat('Closed Won').map((s, i) => `<button type="button" data-stage="${esc(s)}" class="${i < idx ? 'done' : i === idx ? 'cur' : ''}" title="${esc(s)}" aria-label="Move to ${esc(s)}"></button>`).join('')}</div>
       <div class="small muted">${next ? `Next: <button type="button" class="linkbtn" data-stage="${esc(next)}">${esc(next)}</button>` : ''}</div>` : dl.lost_reason ? `<div class="small muted">Reason: ${esc(dl.lost_reason)}</div>` : ''}
     ${dl.price ? `<div class="money"><span>Monthly value</span><span class="mrr">${money(dl.price)}</span>
       <span>${dl.billing === 'Annual' ? 'Billed annually' : 'Billed monthly'}</span><span class="mrr">${money(dl.price * 12)} a year</span>
@@ -147,7 +147,7 @@ function dealCard(dl, m) {
     ${dl.expected_close && !closed ? `<div class="small" style="margin-top:6px">Expected to close ${esc(fmtDate(dl.expected_close))}</div>` : ''}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
       <button class="btn small" data-editdeal>Edit</button>
-      ${dl.stage === 'Proposal sent' ? '<button class="btn small primary" data-won>Won</button>' : ''}
+      ${dl.stage === 'Presentation' ? '<button class="btn small primary" data-won>Won</button>' : ''}
       ${!closed ? '<button class="btn small ghost danger" data-lost>Lost</button>' : '<button class="btn small ghost" data-reopen>Reopen</button>'}
     </div>
   </div>`;

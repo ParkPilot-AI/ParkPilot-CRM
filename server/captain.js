@@ -8,7 +8,7 @@ const A = require('./access');
 const graph = require('./google');
 
 const DAYS = { '30': 30, '90': 90, '365': 365 };
-const OPEN_LEAD = `c.lead_status IN ('New','Contacted','Nurture') OR EXISTS (SELECT 1 FROM deals d2 WHERE d2.contact_id = c.id AND d2.stage NOT IN ('Won','Lost'))`;
+const OPEN_LEAD = `c.lead_status IN ('New','Contacted','Nurture') OR EXISTS (SELECT 1 FROM deals d2 WHERE d2.contact_id = c.id AND d2.stage NOT IN ('Closed Won','Closed Lost'))`;
 const UNALLOCATED = `c.owner_id IS NULL AND c.type <> 'Partner' AND c.lead_status NOT IN ('Lost','Customer')`;
 
 function scopeFor(user, park) {
@@ -36,8 +36,8 @@ function kpis(sc, since, day, now) {
   const reserved = one(`SELECT COUNT(*) n, ${value} v FROM deals d JOIN contacts c ON c.id = d.contact_id WHERE substr(d.reserved_at,1,10) >= ? AND ${sc.sql}`, since);
   const completed = one(`SELECT COUNT(*) n, ${value} v FROM deals d JOIN contacts c ON c.id = d.contact_id WHERE substr(d.completed_at,1,10) >= ? AND ${sc.sql}`, since);
   const pipeline = one(`SELECT COUNT(*) n, ${value} v FROM deals d JOIN contacts c ON c.id = d.contact_id
-                        WHERE d.stage IN ('Demo booked','Demo held','Proposal sent') AND ${sc.sql}`);
-  const lost = one(`SELECT COUNT(*) n FROM deals d JOIN contacts c ON c.id = d.contact_id WHERE d.stage = 'Lost' AND substr(d.stage_changed_at,1,10) >= ? AND ${sc.sql}`, since).n;
+                        WHERE d.stage IN ('Appointment','Presentation') AND ${sc.sql}`);
+  const lost = one(`SELECT COUNT(*) n FROM deals d JOIN contacts c ON c.id = d.contact_id WHERE d.stage = 'Closed Lost' AND substr(d.stage_changed_at,1,10) >= ? AND ${sc.sql}`, since).n;
   const unallocated = one(`SELECT COUNT(*) n FROM contacts c WHERE ${UNALLOCATED} AND ${sc.sql}`).n;
   const overdue = one(`SELECT COUNT(*) n FROM tasks t JOIN contacts c ON c.id = t.contact_id WHERE t.status = 'Open' AND t.due_date < ? AND ${sc.sql}`, day).n;
   return { enquiries, tours, toursAhead, reserved, completed, pipeline, lost, unallocated, overdue,
@@ -57,7 +57,7 @@ function personStats(m, sc, since, day, now) {
                         WHERE c.owner_id = ? AND substr(d.completed_at,1,10) >= ?`, m.id, since);
   const cold = one(`SELECT COUNT(*) n FROM contacts c WHERE c.owner_id = ? AND c.lead_status IN ('New','Contacted','Nurture')
                     AND substr(COALESCE(c.last_contact_at, c.enquiry_date, c.created_at),1,10) < ?
-                    AND EXISTS (SELECT 1 FROM deals d WHERE d.contact_id = c.id AND d.stage IN ('Enquiry','Demo booked','Demo held','Proposal sent'))
+                    AND EXISTS (SELECT 1 FROM deals d WHERE d.contact_id = c.id AND d.stage IN ('Enquiry','Appointment','Presentation'))
                     AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.contact_id = c.id AND t.status = 'Open')
                     AND NOT EXISTS (SELECT 1 FROM appointments a WHERE a.contact_id = c.id AND a.status = 'Scheduled' AND a.start >= ?)`, m.id, U.addDays(day, -14), now).n;
   void sc;
@@ -78,7 +78,7 @@ function log(user, { period = '90', park = null } = {}) {
   const funnel = L.funnel(period, sc);
 
   const unallocated = db.prepare(`SELECT c.id, c.first_name, c.last_name, c.lead_source, c.enquiry_date, c.mobile, c.email, pk.name AS park_name,
-      (SELECT stage FROM deals d WHERE d.contact_id = c.id ORDER BY (d.stage IN ('Won','Lost')), d.updated_at DESC LIMIT 1) AS stage
+      (SELECT stage FROM deals d WHERE d.contact_id = c.id ORDER BY (d.stage IN ('Closed Won','Closed Lost')), d.updated_at DESC LIMIT 1) AS stage
     FROM contacts c LEFT JOIN parks pk ON pk.id = c.park_id WHERE ${UNALLOCATED} AND ${sc.sql}
     ORDER BY COALESCE(c.enquiry_date, c.created_at) DESC LIMIT 15`).all(...sc.args);
 
@@ -93,8 +93,8 @@ function log(user, { period = '90', park = null } = {}) {
 
   // Where leads come from, and which sources turn into demos and won deals.
   const sources = db.prepare(`SELECT COALESCE(c.lead_source, 'Not recorded') AS source, COUNT(*) AS enquiries,
-      SUM(EXISTS (SELECT 1 FROM deals d WHERE d.contact_id = c.id AND d.furthest_stage IN ('Demo held','Proposal sent','Won'))) AS tours,
-      SUM(EXISTS (SELECT 1 FROM deals d WHERE d.contact_id = c.id AND d.stage = 'Won')) AS sales
+      SUM(EXISTS (SELECT 1 FROM deals d WHERE d.contact_id = c.id AND d.furthest_stage IN ('Presentation','Closed Won'))) AS tours,
+      SUM(EXISTS (SELECT 1 FROM deals d WHERE d.contact_id = c.id AND d.stage = 'Closed Won')) AS sales
     FROM contacts c WHERE c.type <> 'Partner' AND substr(COALESCE(c.enquiry_date, c.created_at),1,10) >= ? AND ${sc.sql}
     GROUP BY COALESCE(c.lead_source, 'Not recorded') ORDER BY enquiries DESC LIMIT 8`).all(since, ...sc.args);
 

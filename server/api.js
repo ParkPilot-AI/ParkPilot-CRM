@@ -87,17 +87,17 @@ route('GET', '/api/dashboard', ({ user }) => {
   const monthStart = day.slice(0, 8) + '01';
   // Won this month, as new monthly recurring revenue.
   const won = db.prepare(`SELECT COALESCE(SUM(COALESCE(d.price,0)),0) v, COUNT(*) n FROM deals d JOIN contacts c ON c.id = d.contact_id
-                          WHERE c.owner_id = ? AND d.stage = 'Won' AND substr(d.completed_at,1,10) >= ?`).get(me, monthStart);
+                          WHERE c.owner_id = ? AND d.stage = 'Closed Won' AND substr(d.completed_at,1,10) >= ?`).get(me, monthStart);
   const warmCut = U.addDays(day, -7);
   const warm = db.prepare(`SELECT c.id, c.first_name, c.last_name, c.company, c.lead_source, COALESCE(c.last_contact_at, c.enquiry_date) AS last_touch, d.stage
-                           FROM contacts c JOIN deals d ON d.contact_id = c.id AND d.stage IN ('Enquiry','Demo booked','Demo held','Proposal sent')
+                           FROM contacts c JOIN deals d ON d.contact_id = c.id AND d.stage IN ('Enquiry','Appointment','Presentation')
                            WHERE c.owner_id = ? AND c.lead_status IN ('New','Contacted','Nurture') AND substr(COALESCE(c.last_contact_at, c.enquiry_date, c.created_at),1,10) <= ?
                            AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.contact_id = c.id AND t.status = 'Open')
                            AND NOT EXISTS (SELECT 1 FROM appointments a WHERE a.contact_id = c.id AND a.status = 'Scheduled' AND a.start >= ?)
                            GROUP BY c.id ORDER BY last_touch DESC`).all(me, warmCut, day + 'T00:00');
-  // Proposals out, oldest first: the ones to chase.
+  // Presentations given and awaiting a decision, oldest first: the ones to chase.
   const proposals = db.prepare(`SELECT d.id, d.contact_id, d.deal_type, d.plan, d.price, d.stage_changed_at, c.first_name, c.last_name, c.company FROM deals d
-                                JOIN contacts c ON c.id = d.contact_id WHERE c.owner_id = ? AND d.stage = 'Proposal sent' ORDER BY d.stage_changed_at`).all(me);
+                                JOIN contacts c ON c.id = d.contact_id WHERE c.owner_id = ? AND d.stage = 'Presentation' ORDER BY d.stage_changed_at`).all(me);
   // New leads from Gmail and elsewhere in the last 7 days.
   const fresh = db.prepare(`SELECT c.id, c.first_name, c.last_name, c.company, c.lead_source, c.enquiry_date FROM contacts c
                             WHERE c.owner_id = ? AND c.lead_status = 'New' AND substr(COALESCE(c.enquiry_date, c.created_at),1,10) >= ? ORDER BY COALESCE(c.enquiry_date, c.created_at) DESC LIMIT 8`).all(me, U.addDays(day, -7));
@@ -185,7 +185,7 @@ route('GET', '/api/contacts', ({ user, query }) => {
   const size = Math.min(200, int(query.pageSize) || 50), page = Math.max(1, int(query.page) || 1);
   const rows = db.prepare(`SELECT c.id, c.lead_no, c.type, c.first_name, c.last_name, c.company, c.units, c.interest, c.mobile, c.phone_e164, c.email, c.lead_source, c.lead_status,
       c.enquiry_date, c.last_contact_at, c.dup_group, c.dup_dismissed, c.owner_id, c.park_id, ou.name AS owner_name, pk.name AS park_name,
-      (SELECT stage FROM deals d WHERE d.contact_id = c.id ORDER BY (d.stage IN ('Won','Lost')), d.updated_at DESC LIMIT 1) AS stage,
+      (SELECT stage FROM deals d WHERE d.contact_id = c.id ORDER BY (d.stage IN ('Closed Won','Closed Lost')), d.updated_at DESC LIMIT 1) AS stage,
       (SELECT COUNT(*) FROM tasks t WHERE t.contact_id = c.id AND t.status = 'Open') AS open_tasks,
       (SELECT MIN(start) FROM appointments a WHERE a.contact_id = c.id AND a.status = 'Scheduled' AND a.start >= ?) AS next_appt
     FROM contacts c LEFT JOIN users ou ON ou.id = c.owner_id LEFT JOIN parks pk ON pk.id = c.park_id ${w} ORDER BY ${order} LIMIT ? OFFSET ?`).all(U.nowLocal(), ...args, size, (page - 1) * size);
@@ -223,7 +223,7 @@ route('POST', '/api/contacts', ({ user, body }) => {
 route('GET', '/api/contacts/:id', ({ user, params }) => {
   const c = A.contact(user, params.id), id = c.id;
   const s = getSettings(), day = U.today();
-  const deals = db.prepare(`SELECT d.* FROM deals d WHERE d.contact_id = ? ORDER BY (d.stage IN ('Won','Lost')), d.updated_at DESC`).all(id);
+  const deals = db.prepare(`SELECT d.* FROM deals d WHERE d.contact_id = ? ORDER BY (d.stage IN ('Closed Won','Closed Lost')), d.updated_at DESC`).all(id);
   const tasks = taskRows("t.contact_id = ? AND t.status = 'Open'", [id], `COALESCE(t.due_date,'9999')`).map(t => L.decorateTask(t, s, day));
   const appts = apptRows('a.contact_id = ?', [id], 'a.start DESC');
   const timeline = db.prepare('SELECT * FROM interactions WHERE contact_id = ? ORDER BY at DESC, id DESC LIMIT 500').all(id);
@@ -325,7 +325,7 @@ route('GET', '/api/deals', ({ user, query }) => {
   const sc = leadScope(user, query);
   const out = {};
   for (const st of stages) {
-    const limit = st === 'Lost' || st === 'Won' ? 40 : 200;
+    const limit = st === L.LOST || st === L.WON ? 40 : 200;
     const agg = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(COALESCE(d.price,0)),0) v FROM deals d JOIN contacts c ON c.id = d.contact_id
                             WHERE d.stage = ? AND ${sc.sql}`).get(st, ...sc.args);
     out[st] = {

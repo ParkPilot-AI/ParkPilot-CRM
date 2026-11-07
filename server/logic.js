@@ -3,10 +3,11 @@ const { db, tx, insert, update, get, getSettings, setState, getState, logJob } =
 const U = require('./util');
 
 // The ParkPilot sales pipeline. Deals move forward automatically as things happen (see advanceDeal):
-//   Enquiry -> Demo booked (demo or site visit booked) -> Demo held (outcome recorded) ->
-//   Proposal sent -> Won. "Not a fit" closes it as Lost.
-const STAGES = ['Enquiry', 'Demo booked', 'Demo held', 'Proposal sent', 'Won', 'Lost'];
-const OPEN_STAGES = STAGES.slice(0, 4);
+//   Enquiry -> Appointment (demo or site visit booked) -> Presentation (appointment held and
+//   outcome recorded) -> Closed Won. "Not a fit" (or marking it lost) closes it as Closed Lost.
+const WON = 'Closed Won', LOST = 'Closed Lost';
+const STAGES = ['Enquiry', 'Appointment', 'Presentation', WON, LOST];
+const OPEN_STAGES = STAGES.slice(0, 3);
 const APPT_TYPES = ['Demo', 'Discovery call', 'Follow-up call', 'Site visit', 'Onboarding call'];
 const REMOTE_TYPES = ['Demo', 'Onboarding call'];   // Google Meet by default
 const CALL_TYPES = ['Discovery call', 'Follow-up call'];
@@ -227,9 +228,8 @@ function assignContacts(contacts, ownerId, parkId, by) {
 /* ----------------------------------------------------------------- deals */
 
 const STAGE_TASKS = {
-  'Demo held': [{ title: 'Send proposal', category: 'Email', priority: 'High', days: 1 }],
-  'Proposal sent': [{ title: 'Follow up on proposal', category: 'Call', priority: 'High', days: 3 }],
-  'Won': [
+  'Presentation': [{ title: 'Send proposal', category: 'Email', priority: 'High', days: 1 }],
+  [WON]: [
     { title: 'Kick off onboarding and introduce their account manager', category: 'Admin', priority: 'High', days: 1 },
     { title: 'Check-in call after go-live', category: 'Call', priority: 'Medium', days: 21 }
   ]
@@ -242,22 +242,23 @@ function setDealStage(dealId, stage, { lostReason, skipTasks = false, reason } =
   if (d.stage === stage) return;
   const s = getSettings();
   tx(() => {
-    const was = d.furthest_stage || (d.stage === 'Lost' ? 'Enquiry' : d.stage);
-    const furthest = stage !== 'Lost' && STAGES.indexOf(stage) > STAGES.indexOf(was) ? stage : was;
-    const dp = { stage, furthest_stage: furthest, stage_changed_at: U.nowStamp(), lost_reason: stage === 'Lost' ? (lostReason || d.lost_reason) : d.lost_reason };
-    if (!d.reserved_at && STAGES.indexOf(stage) >= STAGES.indexOf('Proposal sent') && stage !== 'Lost') dp.reserved_at = U.nowStamp();
-    if (stage === 'Won' && !d.completed_at) dp.completed_at = U.nowStamp();
+    const was = d.furthest_stage || (d.stage === LOST ? 'Enquiry' : d.stage);
+    const furthest = stage !== LOST && STAGES.indexOf(stage) > STAGES.indexOf(was) ? stage : was;
+    const dp = { stage, furthest_stage: furthest, stage_changed_at: U.nowStamp(), lost_reason: stage === LOST ? (lostReason || d.lost_reason) : d.lost_reason };
+    // reserved_at: when the deal first reached Presentation; completed_at: when it was won.
+    if (!d.reserved_at && STAGES.indexOf(stage) >= STAGES.indexOf('Presentation') && stage !== LOST) dp.reserved_at = U.nowStamp();
+    if (stage === WON && !d.completed_at) dp.completed_at = U.nowStamp();
     update('deals', dealId, dp);
-    insert('interactions', { contact_id: d.contact_id, deal_id: dealId, type: 'Deal', at: U.nowLocal(), summary: `Deal moved from ${d.stage} to ${stage}${stage === 'Lost' && lostReason ? ' – ' + lostReason : reason ? ' (' + reason + ')' : ''}.` });
+    insert('interactions', { contact_id: d.contact_id, deal_id: dealId, type: 'Deal', at: U.nowLocal(), summary: `Deal moved from ${d.stage} to ${stage}${stage === LOST && lostReason ? ' – ' + lostReason : reason ? ' (' + reason + ')' : ''}.` });
     for (const tpl of skipTasks ? [] : STAGE_TASKS[stage] || []) {
       const due = U.addDays(U.today(), tpl.days);
       createTask({ title: tpl.title, category: tpl.category, priority: tpl.priority, due_date: U.nextOpenDay(due, s.closedDays),
         contact_id: d.contact_id, deal_id: dealId, auto_key: `deal:${dealId}:${stage}:${tpl.title}` });
     }
-    if (d.stage === 'Lost' && OPEN_STAGES.includes(stage)) db.prepare("UPDATE contacts SET lead_status = 'Contacted' WHERE id = ? AND lead_status = 'Lost'").run(d.contact_id);
-    if (stage === 'Won') update('contacts', d.contact_id, { type: 'Customer', lead_status: 'Customer' });
-    if (stage === 'Lost') {
-      const open = db.prepare("SELECT COUNT(*) n FROM deals WHERE contact_id = ? AND stage NOT IN ('Lost','Won') AND id <> ?").get(d.contact_id, dealId).n;
+    if (d.stage === LOST && OPEN_STAGES.includes(stage)) db.prepare("UPDATE contacts SET lead_status = 'Contacted' WHERE id = ? AND lead_status = 'Lost'").run(d.contact_id);
+    if (stage === WON) update('contacts', d.contact_id, { type: 'Customer', lead_status: 'Customer' });
+    if (stage === LOST) {
+      const open = db.prepare("SELECT COUNT(*) n FROM deals WHERE contact_id = ? AND stage NOT IN (?, ?) AND id <> ?").get(d.contact_id, LOST, WON, dealId).n;
       if (!open) db.prepare("UPDATE contacts SET lead_status = 'Lost' WHERE id = ? AND type = 'Prospect'").run(d.contact_id);
     }
   });
@@ -265,7 +266,7 @@ function setDealStage(dealId, stage, { lostReason, skipTasks = false, reason } =
 }
 
 // Moves a deal on to `stage` only if that is further along than where it is now (never backwards,
-// never out of Won or Lost). Returns true if it moved.
+// never out of Closed Won or Closed Lost). Returns true if it moved.
 function advanceDeal(dealId, stage, opts = {}) {
   const d = dealId && get('deals', dealId);
   if (!d || !OPEN_STAGES.includes(d.stage)) return false;
@@ -276,7 +277,7 @@ function advanceDeal(dealId, stage, opts = {}) {
 
 // The open deal for a contact, creating one at Enquiry if they have none (e.g. a dormant lead booking a demo).
 function ensureDeal(contactId) {
-  const d = db.prepare("SELECT id FROM deals WHERE contact_id = ? AND stage NOT IN ('Won','Lost') ORDER BY updated_at DESC LIMIT 1").get(contactId);
+  const d = db.prepare("SELECT id FROM deals WHERE contact_id = ? AND stage NOT IN (?, ?) ORDER BY updated_at DESC LIMIT 1").get(contactId, WON, LOST);
   if (d) return d.id;
   const c = get('contacts', contactId);
   const id = insert('deals', { contact_id: contactId, stage: 'Enquiry', furthest_stage: 'Enquiry', stage_changed_at: U.nowStamp(), deal_type: (c && PRODUCTS.includes(c.interest) && c.interest) || 'Not decided yet' });
@@ -289,7 +290,7 @@ function ensureDeal(contactId) {
 // date falls in it, whether or not a deal was opened – plus anyone whose deal was opened in it.
 // Each person is counted once, at the furthest stage any of their deals reached (lost deals still
 // count towards the stages they got to). "Here now" and values come from their open deals.
-const FUNNEL_STAGES = [...OPEN_STAGES, 'Won'];
+const FUNNEL_STAGES = [...OPEN_STAGES, WON];
 // `scope` limits it to some leads: { sql, args } on contacts aliased c (see access.contactWhere).
 function funnel(period = '90', scope = { sql: '1=1', args: [] }) {
   const days = { '30': 30, '90': 90, '365': 365 }[String(period)];
@@ -307,14 +308,14 @@ function funnel(period = '90', scope = { sql: '1=1', args: [] }) {
     const all = byContact.get(c.id) || [];
     const inPeriod = c.d >= since;
     // Deals that belong to this period: opened in it, or still open for someone who enquired in it.
-    const mine = all.filter(d => d.created >= since || (inPeriod && !['Won', 'Lost'].includes(d.stage)));
+    const mine = all.filter(d => d.created >= since || (inPeriod && ![WON, LOST].includes(d.stage)));
     if (!inPeriod && !mine.length) continue;
     total++;
     let reach = 0, openAt = mine.length ? -1 : 0;
     for (const d of mine) {
-      const far = d.furthest_stage || (d.stage === 'Lost' ? 'Enquiry' : d.stage);
+      const far = d.furthest_stage || (d.stage === LOST ? 'Enquiry' : d.stage);
       reach = Math.max(reach, idx(far));
-      if (d.stage === 'Lost') { lost++; const k = d.lost_reason || 'No reason given'; lostReasons[k] = (lostReasons[k] || 0) + 1; continue; }
+      if (d.stage === LOST) { lost++; const k = d.lost_reason || 'No reason given'; lostReasons[k] = (lostReasons[k] || 0) + 1; continue; }
       const at = idx(d.stage);
       if (at >= 0) { stages[at].value += d.value || 0; openAt = Math.max(openAt, at); }
     }
@@ -407,7 +408,7 @@ function createAppointment(data) {
     // A demo or site visit means they're in the pipeline; a quick call attaches to an open deal if there is one.
     if (TOUR_TYPES.includes(type)) dealId = ensureDeal(contact.id);
     else {
-      const d = db.prepare("SELECT id FROM deals WHERE contact_id = ? AND stage NOT IN ('Won','Lost') ORDER BY updated_at DESC LIMIT 1").get(contact.id);
+      const d = db.prepare("SELECT id FROM deals WHERE contact_id = ? AND stage NOT IN (?, ?) ORDER BY updated_at DESC LIMIT 1").get(contact.id, WON, LOST);
       if (d) dealId = d.id;
     }
   }
@@ -426,7 +427,7 @@ function createAppointment(data) {
         summary: `${type} booked for ${fmtWhen(data.start)}.` });
       touchContact(contact.id);
     }
-    if (dealId && TOUR_TYPES.includes(type)) advanceDeal(dealId, 'Demo booked', { reason: `${type.toLowerCase()} booked` });
+    if (dealId && TOUR_TYPES.includes(type)) advanceDeal(dealId, 'Appointment', { reason: `${type.toLowerCase()} booked` });
     syncAutoTasks(get('appointments', id));
     return id;
   });
@@ -481,9 +482,9 @@ function cancelAppointment(id, { message, fromOutlook = false } = {}) {
 }
 
 // Records how an appointment went. For a demo or site visit:
-//   result 'held'    -> deal moves to Demo held (and Proposal sent if one went out), with the product,
-//                       plan, monthly price and agreed next step saved;
-//   result 'not_fit' -> deal closed as Lost ("Not a fit");
+//   result 'held'    -> deal moves to Presentation, with the product, plan, monthly price and agreed
+//                       next step saved (a "Follow up on proposal" task if one already went out);
+//   result 'not_fit' -> deal closed as Closed Lost ("Not a fit");
 //   result 'no_show' -> a "Rebook" call is added to today's list.
 function recordOutcome(id, input = {}) {
   const { outcome, notes, nextStage, result, product, plan, monthly, proposal_sent, next_steps, next_step_date } = input;
@@ -516,7 +517,7 @@ function recordOutcome(id, input = {}) {
       if (!dealId && result !== 'no_show') { dealId = ensureDeal(a.contact_id); update('appointments', id, { deal_id: dealId }, { touch: false }); }
       if (result === 'not_fit') {
         if (follow) update('tasks', follow.id, { status: 'Dropped', drop_reason: 'Not a fit', completed_at: U.nowStamp() });
-        setDealStage(dealId, 'Lost', { lostReason: 'Not a fit' });
+        setDealStage(dealId, LOST, { lostReason: 'Not a fit' });
       } else if (result === 'no_show') {
         if (follow) update('tasks', follow.id, { status: 'Dropped', drop_reason: 'Did not attend', completed_at: U.nowStamp() });
         createTask({ title: `Rebook ${a.type.toLowerCase()} with ${name()}`, category: 'Call', priority: 'High',
@@ -533,8 +534,11 @@ function recordOutcome(id, input = {}) {
           if (follow) update('tasks', follow.id, { title: `Next step: ${next_steps}`, due_date: due, original_due_date: null, deal_id: dealId });
           else createTask({ title: `Next step: ${next_steps}`, category: 'Follow-up', priority: 'High', due_date: due, contact_id: a.contact_id, deal_id: dealId, owner_id: a.owner_id });
         } else if (follow) update('tasks', follow.id, { status: 'Dropped', drop_reason: 'Replaced by stage task', completed_at: U.nowStamp() });
-        advanceDeal(dealId, 'Demo held', { skipTasks: !!next_steps || !!proposal_sent, reason: `${a.type.toLowerCase()} held` });
-        if (proposal_sent) advanceDeal(dealId, 'Proposal sent', { reason: 'proposal sent after the ' + a.type.toLowerCase() });
+        advanceDeal(dealId, 'Presentation', { skipTasks: !!next_steps || !!proposal_sent, reason: `${a.type.toLowerCase()} held` });
+        if (proposal_sent && !next_steps) {
+          createTask({ title: 'Follow up on proposal', category: 'Call', priority: 'High', due_date: U.nextOpenDay(U.addDays(U.today(), 3), s.closedDays),
+            contact_id: a.contact_id, deal_id: dealId, owner_id: a.owner_id, auto_key: `deal:${dealId}:proposal-follow-up` });
+        }
       }
     } else if (follow) update('tasks', follow.id, { title: `Follow up: ${summary}` });
   });
@@ -556,7 +560,7 @@ function fmtWhen(dt) {
 function httpError(status, message) { const e = new Error(message); e.status = status; return e; }
 
 module.exports = {
-  STAGES, OPEN_STAGES, APPT_TYPES, REMOTE_TYPES, CALL_TYPES, TOUR_TYPES, PRODUCTS, PLANS, LOST_REASONS, funnel, CATEGORIES, PRIORITIES, LEAD_STATUSES, advanceDeal, ensureDeal,
+  STAGES, OPEN_STAGES, WON, LOST, APPT_TYPES, REMOTE_TYPES, CALL_TYPES, TOUR_TYPES, PRODUCTS, PLANS, LOST_REASONS, funnel, CATEGORIES, PRIORITIES, LEAD_STATUSES, advanceDeal, ensureDeal,
   urgencyOf, decorateTask, rollOverTasks, maybeScheduledRollover, createTask, completeTask, snoozeTask, reviewTask,
   addInteraction, logCall, mergeContacts, touchContact, setDealStage, assignContacts,
   suggestSlots, createAppointment, updateAppointment, cancelAppointment, recordOutcome, fmtWhen, httpError, syncAutoTasks

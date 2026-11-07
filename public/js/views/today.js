@@ -24,7 +24,7 @@ export async function render(el) {
     if (!nowShown && a.start > now) { nowShown = true; line = `<div class="now-line">Now, ${esc(now.slice(11))}</div>`; }
     return line + diaryCard(a);
   }).join('') + (!nowShown && d.appts.length ? `<div class="now-line">Now, ${esc(now.slice(11))}</div>` : '')
-    : `<div class="empty"><strong>Nothing booked today</strong>A quiet diary is a good time to chase proposals and call warm leads.</div>`;
+    : `<div class="empty"><strong>Nothing booked today</strong>A quiet diary is a good time to chase presentations awaiting a decision and call warm leads.</div>`;
 
   const g = d.google || {};
   const welcome = !isMgr() && d.contactCount === 0 ? `<div class="callout" style="margin-bottom:16px"><b>Welcome.</b> No leads have been allocated to you yet; anyone you add yourself is yours. Connect Google in <a href="#/settings">Settings</a> so emails become leads and appointments go into your calendar.</div>`
@@ -91,10 +91,10 @@ export async function render(el) {
           : '<div class="empty small">Every open lead has a next step.</div>'}
       </section>
       <section class="panel" aria-labelledby="prop-h">
-        <div class="panel-head"><h2 id="prop-h">Proposals out</h2><span class="badge ${d.proposals.count ? 'sand' : ''}">${d.proposals.count}</span><div class="spacer"></div>${d.proposals.mrr ? `<span class="faint small mrr">${money(d.proposals.mrr)}/month in play</span>` : ''}</div>
+        <div class="panel-head"><h2 id="prop-h">Awaiting decision</h2><span class="badge ${d.proposals.count ? 'sand' : ''}">${d.proposals.count}</span><div class="spacer"></div>${d.proposals.mrr ? `<span class="faint small mrr">${money(d.proposals.mrr)}/month in play</span>` : ''}</div>
         ${d.proposals.count ? `<ul class="mini-list">${d.proposals.top.map(p => `<li><span><a href="#/contacts/${p.contact_id}"><b>${esc(fullName(p))}</b></a> <span class="faint small">${esc([p.first_name || p.last_name ? p.company : null, p.deal_type, p.plan].filter(Boolean).join(' · '))}${p.price ? ' · ' + money(p.price) + '/month' : ''}</span></span>
           <span class="faint small nowrap">sent ${esc(fmtAgo(p.stage_changed_at))}</span></li>`).join('')}</ul>`
-          : '<div class="empty small">No proposals waiting. When you record a demo with a proposal sent, it shows here until it’s won or lost.</div>'}
+          : '<div class="empty small">Nothing awaiting a decision. When you record how an appointment went, the deal shows here at Presentation until it’s closed won or lost.</div>'}
       </section>
     </div>`;
 

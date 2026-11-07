@@ -36,11 +36,11 @@ export async function render(el) {
 
     <div class="kpis">
       ${tile('Enquiries', num(h.enquiries))}
-      ${tile('Demos held', num(h.tours), h.toursAhead ? `${plural(h.toursAhead, 'more')} booked, next 2 weeks` : 'None booked in the next 2 weeks')}
-      ${tile('Proposals sent', num(h.reserved.n), h.reserved.v ? `${money(h.reserved.v)}/month proposed` : 'In this period')}
-      ${tile('Won', num(h.completed.n), h.completed.v ? `${money(h.completed.v)}/month new revenue` : 'New customers')}
+      ${tile('Appointments held', num(h.tours), h.toursAhead ? `${plural(h.toursAhead, 'more')} booked, next 2 weeks` : 'None booked in the next 2 weeks')}
+      ${tile('Reached presentation', num(h.reserved.n), h.reserved.v ? `${money(h.reserved.v)}/month presented` : 'In this period')}
+      ${tile('Closed won', num(h.completed.n), h.completed.v ? `${money(h.completed.v)}/month new revenue` : 'New customers')}
       ${tile('Enquiry to won', h.enquiries ? `${h.conversion}%` : '–', `${num(h.lost)} lost`)}
-      ${tile('In the pipeline', (money(h.pipeline.v) || '£0') + '/mo', `${plural(h.pipeline.n, 'deal')} from demo booked onwards`)}
+      ${tile('In the pipeline', (money(h.pipeline.v) || '£0') + '/mo', `${plural(h.pipeline.n, 'deal')} at Appointment or Presentation`)}
       ${tile('Annual value in pipeline', money(h.pipeline.v * 12) || '£0', 'If everything open were won')}
       ${solo ? '' : tile('Unallocated', num(h.unallocated), h.unallocated ? 'Waiting for an owner' : 'Every lead has an owner', { href: '#/contacts?owner=none' + (park ? '&park=' + park : ''), tone: h.unallocated ? 'amber' : '' })}
       ${tile('Overdue tasks', num(h.overdue), h.overdue ? (solo ? 'On your list' : 'Across the team') : 'Nothing overdue', { tone: h.overdue ? 'red' : '' })}
@@ -112,7 +112,7 @@ export async function render(el) {
       </section>
       <section class="panel" aria-labelledby="src-h">
         <div class="panel-head"><h2 id="src-h">Where leads come from</h2><span class="faint small">${esc(periodText(d.period))}</span></div>
-        ${d.sources.length ? `<div class="table-wrap"><table class="list src-table"><thead><tr><th>Source</th><th class="num">Enquiries</th><th class="num">Reached demo</th><th class="num">Won</th></tr></thead>
+        ${d.sources.length ? `<div class="table-wrap"><table class="list src-table"><thead><tr><th>Source</th><th class="num">Enquiries</th><th class="num">Reached presentation</th><th class="num">Won</th></tr></thead>
           <tbody>${d.sources.map(s => `<tr><td>${esc(s.source)}</td><td class="num">${num(s.enquiries)}</td><td class="num">${num(s.tours)} <span class="faint small">${pct(s.tours, s.enquiries)}</span></td><td class="num">${num(s.sales)} <span class="faint small">${pct(s.sales, s.enquiries)}</span></td></tr>`).join('')}</tbody></table></div>`
           : '<div class="empty small">No enquiries in this period.</div>'}
       </section>
