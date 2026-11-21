@@ -1,69 +1,135 @@
 # ParkPilot CRM
 
-ParkPilot's own sales CRM for tracking holiday park operators from first enquiry to signed customer.
-Leads arrive straight from Gmail, demos go into Google Calendar with a Meet link, and the pipeline
-runs **Enquiry → Appointment → Presentation → Closed Won** (or Closed Lost). Hosted on Netlify,
-signed in with Google.
+**Simple to use. Built for holiday park sales.**
+
+ParkPilot CRM is the sales CRM for holiday park sales teams: a mobile-first web app where leads arrive
+automatically, each advisor has a clear daily task list, and every lead moves through four stages:
+
+**Enquiry → Appointment → Park Tour → Closed Sale**
+
+It shares one database, one login and one list of people with **ParkPilot ecco** (email marketing), and
+receives qualified leads from **ParkPilot AI** (AI Owner Services).
+
+> ParkPilot's own internal sales CRM (park operators as prospects, Google-only sign-in, Netlify Blobs)
+> previously lived on `main` and is preserved unchanged on the `internal-crm` branch.
 
 ## What it does
 
-- **Leads from Gmail.** Put the `CRM Leads` label on any email (or let a Gmail filter do it). Within
-  10 minutes it becomes a lead with a "Reply to…" task for today. Website form emails are read field by
-  field (Name, Email, Phone, Park, Units, Role, County, Interested in, Message). Emails from people
-  already in the CRM go on their timeline instead. Imported emails move to `CRM Imported`.
-  Only emails with a name and an email address or phone number become leads; the rest move to
-  `CRM Not imported` for you to check. Settings offers a one-click clean-up of unnamed leads
-  imported earlier.
-- **Park operator details** on every lead: park or group name, job title, units, number of parks,
-  area, website, current systems and which product they're interested in.
-- **Deals priced in ParkPilot plans** (AI Starter £495 / Professional £995 / Enterprise; CRM Essentials
-  £149 / Professional £299 / Group), shown as monthly and annual value.
-- **Demos and calls** booked into Google Calendar with a Google Meet link and an invite to the customer.
-  Recording a demo moves the deal on and sets the next task automatically.
-- **Today**, **Leads**, **Diary**, **Pipeline** and **Overview** pages; works on a phone and installs as an app.
-- **One user to start**: whoever is in `OWNER_EMAILS` (or the first person to sign in) is an **Admin**
-  with full access to everything. Add sales executives or managers later under Settings → Team.
+| Page | What's there |
+| --- | --- |
+| **Today** | Your tasks (overdue first), today's park tours, new enquiries this week, and three headline numbers |
+| **Pipeline** | Open leads in Enquiry, Appointment and Park Tour, oldest first, with days in stage. "Mine" filter |
+| **Leads** | Search by name, email or phone (07700 900123 finds +447700900123); filter by status, stage, advisor |
+| **Lead** | Call, text and email buttons; move stage; reassign; book park tours; tasks; timeline; mark as sold or lost; marketing status from ecco |
+| **Diary** | Park tours for the next 60 days by day, plus past tours awaiting an outcome |
+| **Owners** | Everyone who has bought, with sale date and price |
+| **Settings** | Park name and time zone; parks (Group plan); team, roles and who receives leads; connections |
 
-## How it fits together
+Automatic behaviour (in the database, so it applies however a change is made):
+
+- Booking a park tour moves the lead to **Appointment**; completing it moves it to **Park Tour**.
+- Marking a lead as sold sets **Closed Sale**, marks the person as an **owner** and adds a welcome task.
+- Stage, outcome and advisor changes are written to the timeline.
+- New leads from ParkPilot AI are **shared fairly**: the advisor at that park with the fewest open leads
+  gets the next one. Each new lead gets a "Respond to new enquiry" task due within 2 hours.
+- The same person is never entered twice: matching on email, then phone. A repeat enquiry joins their
+  open lead.
+- Park tours download as `.ics` files that open in Outlook, Google Calendar and Apple Calendar.
+
+## Sign-in
+
+**Continue with Google** or **Continue with Microsoft** (Supabase Auth, PKCE). No passwords. The same
+accounts work in ParkPilot ecco. A first-time user with no invitation sets up their park; everyone else
+joins through an invitation link from **Settings → Team**.
+
+## How it fits with ecco and ParkPilot AI
+
+```
+ParkPilot AI ──POST /api/v1/leads──▶ crm.ingest_lead() ──▶ crm.people / crm.leads / tasks
+                                          │
+Supabase project fysaeyexcdpxbfdnqbzl     │  people.contact_id ⇄ public.contacts (trigger, by email)
+  schema public  = ParkPilot ecco ◀───────┘  consent, unsubscribes, campaign events stay in ecco
+  schema crm     = ParkPilot CRM
+  auth, workspaces, members, roles = shared
+```
+
+- **Workspaces** (one per operator), **members** and **roles** are ecco's. CRM wording for the roles:
+  Owner, Sales manager (admin), Sales advisor (editor), Viewer.
+- **Marketing consent lives in ecco.** A lead page shows the person's ecco status (subscribed,
+  unsubscribed, bounced…) and recent campaign activity. "Add to ecco" records how they consented and
+  refuses anyone on the suppression list.
+- **ParkPilot AI → CRM:** see `POST /api/v1/leads` below. Workspace and park IDs are shown under
+  Settings → Connections.
+
+### `POST /api/v1/leads`
+
+```http
+POST /api/v1/leads
+Authorization: Bearer <CRM_LEAD_API_SECRET>
+Content-Type: application/json
+
+{
+  "workspace_id": "…", "park_id": "…",
+  "first_name": "Jane", "last_name": "Smith",
+  "email": "jane@example.com", "phone": "07700 900123",
+  "source": "parkpilot_ai", "channel": "website",
+  "external_source": "parkpilot-widget", "external_id": "<conversation id>",
+  "summary": "Asked about lakeside lodges and part-exchange.",
+  "transcript_url": "https://…",
+  "interest": "Lodge", "part_exchange": true, "marketing_consent": false
+}
+```
+
+| Response | Meaning |
+| --- | --- |
+| `201 {"lead_id": "…"}` | Created, or the existing lead (same `external_id`, or an open lead for this person at this park) |
+| `401` | Missing or wrong secret |
+| `404` | The park doesn't belong to that workspace |
+| `422` | Invalid body (`issues` lists the fields) |
+| `429` | More than 300 requests a minute from one address |
+
+`email` or `phone` is required. Unknown fields are rejected. `transcript_url` must be `https://`.
+
+## Code
 
 | Part | Where |
 | --- | --- |
-| Web pages | `public/` (plain HTML, CSS and JavaScript – no build step) |
-| Server code | `server/` – one request handler shared by everything below |
-| Netlify Functions | `netlify/functions/api.mjs` (all `/api/*` and `/auth/*`) and `scheduled.mjs` (every 10 minutes: Gmail check, task rollover) |
-| Data | One SQLite database (sql.js) in the site's Netlify Blobs store `parkpilot-crm`, with a daily copy kept for 60 days |
-| Sign-in | "Sign in with Google" (OpenID Connect), encrypted 14-day session cookie |
-| Google | `server/google.js`: Gmail lead capture (`gmail.modify`) and Google Calendar events (`calendar.events`) |
+| Pages | `src/app/(app)/…` (Next.js 16 App Router, server components and server actions) |
+| CRM logic | `src/app/(app)/leads/actions.ts`, `src/lib/crm/` |
+| Validation | `src/lib/validation/crm.ts` (Zod) |
+| Database | `supabase/migrations/` (`crm` schema, RLS, triggers, `ingest_lead`) |
+| Lead API | `src/app/api/v1/leads/route.ts` |
+| Brand | `public/brand/` (generated by `scripts/brand/build.py`: P/i mark + ParkPilot + CRM badge) |
 
-## Environment variables (Netlify → Site configuration → Environment variables)
-
-| Name | Value |
-| --- | --- |
-| `GOOGLE_CLIENT_ID` | Client ID of the Google Cloud OAuth client (Web application) |
-| `GOOGLE_CLIENT_SECRET` | Its client secret |
-| `OWNER_EMAILS` | `info@parkpilot.uk` – always an Admin, can never be locked out |
-| `GOOGLE_WORKSPACE_DOMAIN` | Optional. `parkpilot.uk` – only accounts on this Workspace can sign in |
-| `SESSION_SECRET` | Optional. A long random string for session cookies; defaults to the client secret |
-
-Authorised redirect URIs on the OAuth client:
-`https://<your-site>/auth/signin-callback` and `https://<your-site>/api/google/callback`.
-Set the OAuth consent screen's user type to **Internal** so no Google verification is needed and
-connections don't expire.
-
-Step-by-step setup instructions are in `SETUP.md`.
-
-## Running it locally
+Shared with ecco (copied, keep in step): Supabase clients, sign-in, CSP, safe redirects, workspace
+context, UI components, `globals.css`, and the `public` part of `database.types.ts`.
 
 ```bash
 npm install
-DEV_FAKE_LOGIN=you@example.com OWNER_EMAILS=you@example.com npm run dev   # http://localhost:8888
-npm test
+cp .env.example .env.local   # fill in the keys
+npm run dev                  # http://localhost:3000
+npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-`DEV_FAKE_LOGIN` skips Google sign-in for local testing only; it does nothing on Netlify.
+## Setting it up
 
-## Origin
+1. **Supabase → Project Settings → Data API → Exposed schemas:** add `crm`. Nothing in the CRM works
+   until this is done.
+2. **Supabase → Authentication → URL Configuration → Redirect URLs:** add
+   `https://crm.parkpilot.uk/auth/callback` and `https://*--<netlify-site>.netlify.app/auth/callback`
+   for deploy previews.
+3. **Sign-in providers for park customers.** Check the Google and Microsoft providers under
+   Supabase → Authentication → Sign In / Providers. If they use Internal or single-tenant apps (as ecco's
+   mailbox connections do), only ParkPilot's own accounts can sign in. For park staff to sign in, the
+   Google OAuth client used by Supabase Auth needs an **External** consent screen (sign-in scopes only: `openid email profile`, so no
+   sensitive-scope review), and the Microsoft (Azure) provider needs a **multi-tenant** app registration
+   (tenant `common` or `organizations`). This is separate from ecco's mailbox connection, which keeps its
+   stricter scopes.
+4. **Netlify:** set the variables in `.env.example`. `CRM_LEAD_API_SECRET` must match the value
+   ParkPilot AI sends.
 
-Adapted from the Coastfields Customer Portal (holiday-home sales CRM): Microsoft sign-in and Outlook
-sync replaced with Google; holiday homes, plots and part-exchange replaced with park-operator leads and
-ParkPilot plans.
+## Not built yet
+
+Two-way calendar sync (tours go in by `.ics` for now), automatic tour reminders to buyers, the
+part-exchange tracker, owner aftercare workflows, seasonal forecasting and reports, CSV import, and the
+change in the `parkpilot` project that sends widget leads to `/api/v1/leads`.

@@ -1,0 +1,216 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * ParkPilot palette (Brand Foundation · 01 Colour)
+ *   White #FFFFFF ground · Ink #111111 text · Mist #F4F4F5 sections
+ *   Charcoal #26282B dark bands · Charcoal Deep #18191B footer
+ *   Accent #E1140A for action and emphasis only (hover #B80F08;
+ *   small red text on dark uses Accent Light #FF6B63) · Silver #D4D4D8 borders
+ * Contrast: red on white 4.9:1, white on red 4.9:1, Accent Light on Charcoal 5.3:1.
+ */
+:root {
+  --radius: 0.5rem;
+
+  --background: #ffffff;
+  --foreground: #111111;
+  --muted: #f4f4f5;
+  --muted-foreground: #4b5563;
+  --surface: #f4f4f5;
+  --surface-foreground: #111111;
+  --card: #ffffff;
+  --card-foreground: #111111;
+  --popover: #ffffff;
+  --popover-foreground: #111111;
+  --border: #e4e4e7;
+  --input: #d4d4d8;
+  --ring: #e1140a;
+
+  --primary: #e1140a;
+  --primary-foreground: #ffffff;
+  --primary-hover: #b80f08;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #111111;
+  --accent: #e1140a;
+  --accent-foreground: #ffffff;
+  --accent-text: #e1140a;
+  --ink: #111111;
+  --charcoal: #26282b;
+  --charcoal-deep: #18191b;
+  /* Chart series 1: neutral so red stays for emphasis (validated: L band + >=3:1 on white) */
+  --chart-1: #71717a;
+
+  --success: #15803d;
+  --warning: #a16207;
+  --destructive: #b80f08;
+  --destructive-foreground: #ffffff;
+
+  --sidebar: #fafafa;
+}
+
+.dark {
+  --background: #18191b;
+  --foreground: #ffffff;
+  --muted: #222326;
+  --muted-foreground: #b4b5b8;
+  --surface: #222326;
+  --surface-foreground: #ffffff;
+  --card: #26282b;
+  --card-foreground: #ffffff;
+  --popover: #26282b;
+  --popover-foreground: #ffffff;
+  --border: #3a3c40;
+  --input: #4a4c51;
+  --ring: #ff6b63;
+
+  --primary: #e1140a;
+  --primary-foreground: #ffffff;
+  --primary-hover: #b80f08;
+  --secondary: #2f3135;
+  --secondary-foreground: #ffffff;
+  --accent: #e1140a;
+  --accent-foreground: #ffffff;
+  --accent-text: #ff6b63;
+  --ink: #ffffff;
+  --charcoal: #26282b;
+  --charcoal-deep: #18191b;
+  /* Chart series 1, dark step (validated: L 0.48-0.67 + >=3:1 on Charcoal) */
+  --chart-1: #8e8e96;
+
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --destructive: #ff6b63;
+  --destructive-foreground: #18191b;
+
+  --sidebar: #1d1e21;
+}
+
+@theme inline {
+  /* Instrument Sans for everything (Montserrat appears only inside the logo, as outlines). */
+  --font-sans: "Instrument Sans Variable", system-ui, sans-serif;
+  --font-display: "Instrument Sans Variable", system-ui, sans-serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-surface: var(--surface);
+  --color-surface-foreground: var(--surface-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-text: var(--accent-text);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-sidebar: var(--sidebar);
+
+  --color-primary-hover: var(--primary-hover);
+  --color-ink: var(--ink);
+  --color-charcoal: var(--charcoal);
+  --color-charcoal-deep: var(--charcoal-deep);
+  --color-mist: #f4f4f5;
+  --color-silver: #d4d4d8;
+  --color-accent-light: #ff6b63;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --animate-dot: dot-pulse 1.4s ease-in-out infinite;
+  /* Homepage hero: one orchestrated load sequence (send, then arrive in Primary). */
+  --animate-send: send-progress 1.4s cubic-bezier(0.4, 0, 0.2, 1) 0.5s both;
+  --animate-arrive: arrive 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) 1.9s both;
+  --animate-settle: settle 0.4s ease-out 1.9s both;
+
+  @keyframes send-progress {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+  @keyframes arrive {
+    from {
+      opacity: 0;
+      transform: translateY(-14px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes settle {
+    from {
+      transform: translateY(-64px);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes dot-pulse {
+    0%,
+    100% {
+      transform: scale(0.7);
+      opacity: 0.55;
+    }
+    50% {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Headings: Instrument Sans 700 with tight tracking (Brand Foundation · 02). */
+  h1,
+  h2,
+  h3,
+  .font-display {
+    letter-spacing: -0.02em;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
