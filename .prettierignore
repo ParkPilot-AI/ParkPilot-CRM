@@ -1,0 +1,10 @@
+.next
+node_modules
+package-lock.json
+supabase/migrations
+src/lib/supabase/database.types.ts
+public/brand
+supabase/config.toml
+.next
+playwright-report
+test-results

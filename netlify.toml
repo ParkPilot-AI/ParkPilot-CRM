@@ -1,29 +1,10 @@
-# Coastfields Customer Portal – Netlify configuration.
+# ParkPilot CRM on Netlify. Netlify detects Next.js and applies the OpenNext adapter
+# (@netlify/plugin-nextjs). Deploy previews are built for every pull request.
+
 [build]
-  publish = "public"
+  command = "npm run build"
+  publish = ".next"
 
-[functions]
-  node_bundler = "esbuild"
-  # sql.js (SQLite) loads a WebAssembly file at run time; make sure it is packaged with the functions.
-  included_files = ["node_modules/sql.js/dist/sql-wasm.wasm"]
-
-[[headers]]
-  for = "/*"
-  [headers.values]
-    X-Frame-Options = "DENY"
-    X-Content-Type-Options = "nosniff"
-    Referrer-Policy = "same-origin"
-    Strict-Transport-Security = "max-age=31536000"
-    Content-Security-Policy = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'"
-
-# The service worker must always be fetched fresh so app updates reach installed phones.
-[[headers]]
-  for = "/sw.js"
-  [headers.values]
-    Cache-Control = "no-cache"
-    Content-Type = "text/javascript; charset=utf-8"
-
-[[headers]]
-  for = "/manifest.webmanifest"
-  [headers.values]
-    Content-Type = "application/manifest+json"
+[build.environment]
+  NODE_VERSION = "22"
+  NEXT_TELEMETRY_DISABLED = "1"
