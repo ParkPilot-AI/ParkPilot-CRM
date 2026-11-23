@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { publicEnv } from "@/lib/env";
+import { authCookieOptions } from "@/lib/supabase/cookie";
 
 const PUBLIC_PREFIXES = ["/api/v1", "/login", "/auth", "/invite"];
 
@@ -32,6 +33,9 @@ export async function updateSession(
     publicEnv.NEXT_PUBLIC_SUPABASE_URL,
     publicEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
     {
+      cookieOptions: authCookieOptions(
+        request.headers.get("x-forwarded-host") ?? request.headers.get("host"),
+      ),
       cookies: {
         getAll() {
           return request.cookies.getAll();

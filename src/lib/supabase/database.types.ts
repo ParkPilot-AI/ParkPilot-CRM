@@ -312,6 +312,21 @@ export type OAuthTokenRow = {
   updated_at: string;
 };
 
+export type ProductKey = "ai_guest_services" | "ai_owner_services" | "crm" | "ecco";
+export type ProductStatus = "trial" | "active" | "paused" | "cancelled";
+export type WorkspaceProductRow = {
+  workspace_id: string;
+  product: ProductKey;
+  status: ProductStatus;
+  plan: string | null;
+  started_at: string;
+  ends_at: string | null;
+  notes: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 type EccoDatabase = {
   __InternalSupabase: { PostgrestVersion: "14.18" };
   public: {
@@ -617,6 +632,12 @@ type EccoDatabase = {
         Update: Partial<Pick<SendJobRow, "status" | "run_at" | "last_error" | "locked_at" | "locked_by" | "attempts">>;
         Relationships: [];
       };
+      workspace_products: {
+        Row: WorkspaceProductRow;
+        Insert: Partial<WorkspaceProductRow> & { workspace_id: string; product: ProductKey };
+        Update: Partial<Omit<WorkspaceProductRow, "workspace_id" | "product" | "created_at">>;
+        Relationships: [];
+      };
       mailbox_send_log: {
         Row: { id: number; mailbox_id: string; workspace_id: string; kind: string; sent_at: string };
         Insert: { mailbox_id: string; workspace_id: string; kind: "campaign" | "test" | "confirmation" | "alert" | "reply" };
@@ -684,6 +705,7 @@ type EccoDatabase = {
         Returns: ContactRow[];
         SetofOptions: { from: "*"; to: "contacts"; isOneToOne: false; isSetofReturn: true };
       };
+      am_platform_admin: { Args: Record<string, never>; Returns: boolean };
       create_workspace: {
         Args: { p_name: string; p_slug: string };
         Returns: WorkspaceRow;
@@ -692,6 +714,8 @@ type EccoDatabase = {
     };
     Enums: {
       workspace_role: Role;
+      product_key: ProductKey;
+      product_status: ProductStatus;
       mailbox_provider: "google" | "microsoft";
       contact_status: "subscribed" | "unsubscribed" | "bounced" | "complained" | "pending";
       campaign_status: "draft" | "scheduled" | "sending" | "paused" | "sent" | "cancelled" | "failed";

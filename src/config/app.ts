@@ -26,3 +26,10 @@ export const BRAND = {
 export const WORKSPACE_COOKIE = "pp_crm_ws";
 /** Cookie holding the user's currently selected park id. */
 export const PARK_COOKIE = "pp_crm_park";
+
+/** ParkPilot platform apps, for the app switcher. One sign-in (src/lib/supabase/cookie.ts) covers them all. */
+export const PLATFORM_URLS = {
+  hub: process.env.NEXT_PUBLIC_HUB_URL || "https://ai.parkpilot.uk",
+  crm: process.env.NEXT_PUBLIC_CRM_URL || "https://crm.parkpilot.uk",
+  ecco: process.env.NEXT_PUBLIC_ECCO_URL || "https://ecco.parkpilot.uk",
+} as const;

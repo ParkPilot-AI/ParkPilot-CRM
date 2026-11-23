@@ -1,14 +1,17 @@
+import { AppSwitcher } from "@/components/shell/app-switcher";
 import { BottomNav, Sidebar } from "@/components/shell/sidebar";
 import { ParkSwitcher } from "@/components/shell/park-switcher";
 import { UserMenu } from "@/components/shell/user-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { LogoMark } from "@/components/brand/logo";
 import { getCurrentPark } from "@/lib/crm/context";
+import { platformApps } from "@/lib/platform/apps";
 import { createClient } from "@/lib/supabase/server";
 
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   const ctx = await getCurrentPark();
   const supabase = await createClient();
+  const apps = await platformApps(ctx.workspace.id);
   const { data: profile } = await supabase
     .from("profiles")
     .select("full_name")
@@ -31,6 +34,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
             }))}
           />
           <div className="ml-auto flex items-center gap-1">
+            <AppSwitcher apps={apps} current="crm" />
             <ThemeToggle />
             <UserMenu email={ctx.email} name={profile?.full_name ?? null} />
           </div>

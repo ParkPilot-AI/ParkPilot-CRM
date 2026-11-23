@@ -11,7 +11,7 @@ const publicSchema = z.object({
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().min(20),
   NEXT_PUBLIC_SITE_URL: z.url().default("http://localhost:3000"),
   /** ParkPilot ecco, for links from a person to their marketing contact. */
-  NEXT_PUBLIC_ECCO_URL: z.url().default("https://ecco-parkpilot.netlify.app"),
+  NEXT_PUBLIC_ECCO_URL: z.url().default("https://ecco.parkpilot.uk"),
 });
 
 export const publicEnv = publicSchema.parse({
